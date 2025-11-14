@@ -18,6 +18,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    if (!auth) {
+      console.warn("Firebase auth is not configured. Skipping auth listener.")
+      setLoading(false)
+      setUser(null)
+      return
+    }
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser)
       setLoading(false)
@@ -27,6 +34,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const signOut = async () => {
+    if (!auth) {
+      console.warn("Attempted to sign out without Firebase auth configured.")
+      return
+    }
+
     try {
       await firebaseSignOut(auth)
     } catch (error) {

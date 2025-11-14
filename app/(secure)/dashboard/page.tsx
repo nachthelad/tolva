@@ -1,0 +1,721 @@
+"use client"
+
+/**
+ * Dashboard summary:
+ * - Expenses: documents collection filtered by userId, statuses parsed/needs_review, using totalAmount + due/issue dates.
+ * - Income: incomeEntries collection filtered by userId for the current year to drive cards + right-hand breakdown.
+ * - Cards: Total Expenses (year), Total Income (year), Net = income - expenses, This Month (expenses in current month).
+ * - Expenses Breakdown: yearly totals grouped by provider category mapping (electricity/water/etc).
+ * - Income Breakdown: yearly totals grouped by source; includes quick form to add income (stored in incomeEntries).
+ */
+
+import { useAuth } from "@/lib/auth-context"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import type { BillDocument } from "@/lib/firestore-helpers"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { cn } from "@/lib/utils"
+type DashboardDocument = Omit<BillDocument, "uploadedAt"> & { uploadedAt: Date }
+
+const formatter = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" })
+const categoryOrder = ["electricity", "water", "gas", "internet", "hoa", "credit_card", "other"] as const
+
+type IncomeEntry = {
+  id: string
+  amount: number
+  source: string
+  date: Date
+}
+
+type IncomeForm = {
+  amount: string
+  source: string
+  date: string
+}
+
+type DashboardSummary = {
+  totals: {
+    totalExpensesYear: number
+    totalIncomeYear: number
+    netAmount: number
+    monthExpenses: number
+  }
+  categories: Record<string, number>
+  incomeSources: Record<string, number>
+  updatedAt?: string | null
+}
+
+export default function DashboardPage() {
+  const { user } = useAuth()
+  const [loading, setLoading] = useState(true)
+  const [expenseDocs, setExpenseDocs] = useState<DashboardDocument[]>([])
+  const [incomeEntries, setIncomeEntries] = useState<IncomeEntry[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [incomeLoading, setIncomeLoading] = useState(false)
+  const [refreshingDocs, setRefreshingDocs] = useState(false)
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null)
+  const [summaryFallback, setSummaryFallback] = useState<DashboardSummary | null>(null)
+  const [incomeEdits, setIncomeEdits] = useState<Record<string, string>>({})
+  const [incomeAction, setIncomeAction] = useState<{ id: string; type: "update" | "delete" } | null>(null)
+  const [incomeForm, setIncomeForm] = useState<IncomeForm>({
+    amount: "",
+    source: "Salary",
+    date: new Date().toISOString().split("T")[0],
+  })
+
+  useEffect(() => {
+    if (!user) return
+    setLoading(true)
+    ;(async () => {
+      try {
+        const token = await user.getIdToken()
+        const [docs, incomes] = await Promise.all([fetchExpenses(token), fetchIncomeEntries(token)])
+        setExpenseDocs(docs)
+        setIncomeEntries(incomes)
+        setError(null)
+      } catch (err) {
+        console.error("Dashboard load error", err)
+        setError("Failed to load dashboard data.")
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [user])
+
+useEffect(() => {
+  if (!user) return
+  ;(async () => {
+    try {
+      const token = await user.getIdToken()
+        const summary = await fetchDashboardSummary(token)
+        if (summary) {
+          setSummaryFallback(summary)
+        }
+      } catch (err) {
+        console.warn("Dashboard summary fetch failed:", err)
+      }
+    })()
+}, [user])
+
+  const reloadIncomeEntries = useCallback(
+    async (providedToken?: string) => {
+      if (!user) return
+      const tokenToUse = providedToken ?? (await user.getIdToken())
+      const refreshed = await fetchIncomeEntries(tokenToUse)
+      setIncomeEntries(refreshed)
+    },
+    [user],
+  )
+
+  useEffect(() => {
+    const editMap: Record<string, string> = {}
+    incomeEntries.forEach((entry) => {
+      editMap[entry.id] = entry.amount ? entry.amount.toString() : ""
+    })
+    setIncomeEdits(editMap)
+  }, [incomeEntries])
+
+  useEffect(() => {
+    if (!refreshMessage) return
+    const timer = setTimeout(() => setRefreshMessage(null), 4000)
+    return () => clearTimeout(timer)
+  }, [refreshMessage])
+
+  const currentYear = new Date().getFullYear()
+  const currentMonthName = new Date().toLocaleDateString("es-AR", { month: "long", year: "numeric" })
+
+  const expenseMetrics = useMemo(() => {
+    const docs = expenseDocs.filter((doc) => ["parsed", "needs_review"].includes(doc.status))
+    const totals = {
+      year: 0,
+      month: 0,
+    }
+    const categoryTotals: Record<(typeof categoryOrder)[number], number> = {
+      electricity: 0,
+      water: 0,
+      gas: 0,
+      internet: 0,
+      hoa: 0,
+      credit_card: 0,
+      other: 0,
+    }
+
+    docs.forEach((doc) => {
+      const amount = doc.totalAmount ?? 0
+      if (!amount) return
+      const docDate = resolveDocDate(doc)
+      if (!docDate) return
+      if (docDate.getFullYear() === currentYear) {
+        totals.year += amount
+        if (docDate.getMonth() === new Date().getMonth()) {
+          totals.month += amount
+        }
+        const categoryKey = mapProvider(doc.providerId, doc.category)
+        categoryTotals[categoryKey] += amount
+      }
+    })
+
+    return { totals, categoryTotals }
+  }, [expenseDocs, currentYear])
+
+  const incomeMetrics = useMemo(() => {
+    const yearEntries = incomeEntries.filter((entry) => entry.date.getFullYear() === currentYear)
+    const totalIncomeYear = yearEntries.reduce((sum, entry) => sum + entry.amount, 0)
+    const perSource = yearEntries.reduce<Record<string, number>>((acc, entry) => {
+      acc[entry.source] = (acc[entry.source] ?? 0) + entry.amount
+      return acc
+    }, {})
+    return { totalIncomeYear, perSource }
+  }, [incomeEntries, currentYear])
+
+  const netAmount = incomeMetrics.totalIncomeYear - expenseMetrics.totals.year
+
+  useEffect(() => {
+    if (!user) return
+    if (loading) return
+    const hasLiveData = expenseDocs.length > 0 || incomeEntries.length > 0
+    if (!hasLiveData) return
+
+    const payload: DashboardSummary = {
+      totals: {
+        totalExpensesYear: expenseMetrics.totals.year,
+        totalIncomeYear: incomeMetrics.totalIncomeYear,
+        netAmount,
+        monthExpenses: expenseMetrics.totals.month,
+      },
+      categories: { ...expenseMetrics.categoryTotals },
+      incomeSources: { ...incomeMetrics.perSource },
+      updatedAt: new Date().toISOString(),
+    }
+
+    ;(async () => {
+      try {
+        const token = await user.getIdToken()
+        await fetch("/api/dashboard-summary", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        })
+      } catch (err) {
+        console.warn("Dashboard summary save failed:", err)
+      }
+    })()
+  }, [user, loading, expenseDocs, incomeEntries, expenseMetrics, incomeMetrics, netAmount])
+
+  const fallbackTotals = summaryFallback?.totals ?? {
+    totalExpensesYear: 0,
+    totalIncomeYear: 0,
+    netAmount: 0,
+    monthExpenses: 0,
+  }
+  const fallbackCategories = summaryFallback?.categories ?? defaultCategoryTotals()
+  const fallbackIncomeSources = summaryFallback?.incomeSources ?? {}
+
+  const hasLiveExpenses = expenseDocs.length > 0
+  const hasLiveIncome = incomeEntries.length > 0
+
+  const displayTotals = {
+    totalExpensesYear: hasLiveExpenses ? expenseMetrics.totals.year : fallbackTotals.totalExpensesYear,
+    totalIncomeYear: hasLiveIncome ? incomeMetrics.totalIncomeYear : fallbackTotals.totalIncomeYear,
+    netAmount: hasLiveExpenses || hasLiveIncome ? netAmount : fallbackTotals.netAmount,
+    monthExpenses: hasLiveExpenses ? expenseMetrics.totals.month : fallbackTotals.monthExpenses,
+  }
+
+  const displayCategoryTotals = hasLiveExpenses ? expenseMetrics.categoryTotals : fallbackCategories
+  const displayIncomeSources = hasLiveIncome ? incomeMetrics.perSource : fallbackIncomeSources
+  const categoryMax = Math.max(...Object.values(displayCategoryTotals), 0)
+  const incomeMax = Math.max(...Object.values(displayIncomeSources), 0)
+
+  const handleIncomeSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!user) {
+      setError("Cannot save income right now.")
+      return
+    }
+    const amountValue = Number.parseFloat(incomeForm.amount)
+    if (!amountValue || amountValue <= 0) {
+      setError("Enter a valid amount.")
+      return
+    }
+
+    setIncomeLoading(true)
+    setError(null)
+    try {
+      const token = await user.getIdToken()
+      const response = await fetch("/api/income", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          amount: amountValue,
+          source: incomeForm.source,
+          date: incomeForm.date,
+        }),
+      })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error ?? "Failed to add income")
+      }
+
+      setIncomeForm((prev) => ({ ...prev, amount: "" }))
+      await reloadIncomeEntries(token)
+    } catch (err) {
+      console.error("Add income error", err)
+      setError("Failed to add income entry.")
+    } finally {
+      setIncomeLoading(false)
+    }
+  }
+
+  const handleIncomeAmountChange = (id: string, value: string) => {
+    setIncomeEdits((prev) => ({ ...prev, [id]: value }))
+  }
+
+  const handleSaveIncome = async (id: string) => {
+    if (!user) return
+    const amountValue = Number.parseFloat(incomeEdits[id] ?? "")
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      setError("Enter a valid amount for the selected income.")
+      return
+    }
+    setIncomeAction({ id, type: "update" })
+    try {
+      const token = await user.getIdToken()
+      const response = await fetch(`/api/income/${id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ amount: amountValue }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error ?? "Failed to update income entry")
+      }
+      await reloadIncomeEntries(token)
+      setError(null)
+      setRefreshMessage("Income amount updated.")
+    } catch (err) {
+      console.error("Update income error:", err)
+      setError("Failed to update income entry.")
+    } finally {
+      setIncomeAction(null)
+    }
+  }
+
+  const handleDeleteIncome = async (id: string) => {
+    if (!user) return
+    setIncomeAction({ id, type: "delete" })
+    try {
+      const token = await user.getIdToken()
+      const response = await fetch(`/api/income/${id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error ?? "Failed to delete income entry")
+      }
+      await reloadIncomeEntries(token)
+      setError(null)
+      setRefreshMessage("Income entry removed.")
+    } catch (err) {
+      console.error("Delete income error:", err)
+      setError("Failed to delete income entry.")
+    } finally {
+      setIncomeAction(null)
+    }
+  }
+
+  const handleRefreshParsedData = async () => {
+    if (!user) return
+    setRefreshingDocs(true)
+    setRefreshMessage(null)
+    try {
+      const token = await user.getIdToken()
+      const docs = await fetchExpenses(token)
+      const docsNeedingParse = docs.filter((doc) => doc.status !== "parsed" || !doc.totalAmount)
+      for (const doc of docsNeedingParse) {
+        await fetch("/api/parse", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ documentId: doc.id }),
+        }).catch((err) => {
+          console.warn("Parse refresh failed for", doc.id, err)
+        })
+      }
+
+      const updatedDocs = await fetchExpenses(token)
+      setExpenseDocs(updatedDocs)
+      setRefreshMessage(
+        docsNeedingParse.length ? "Parsed documents refreshed." : "All documents were already up to date.",
+      )
+    } catch (err) {
+      console.error("Refresh parse error", err)
+      setError("Failed to refresh parsed data.")
+    } finally {
+      setRefreshingDocs(false)
+    }
+  }
+
+  if (!user) {
+    return (
+      <div className="p-8 text-center text-muted-foreground">
+        Please sign in to view your dashboard.
+      </div>
+    )
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-slate-400">Loading dashboard...</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-6 space-y-8 bg-slate-950 min-h-screen text-slate-100">
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p className="text-sm uppercase tracking-wide text-slate-400">Finance overview</p>
+          <h1 className="text-3xl font-bold">Expense Dashboard</h1>
+          <p className="text-slate-400 mt-2">Monitor and analyze your utility expenses across all services.</p>
+          {error && <p className="text-sm text-red-400 mt-2">{error}</p>}
+          {refreshMessage && <p className="text-sm text-emerald-400 mt-1">{refreshMessage}</p>}
+        </div>
+        <button
+          onClick={handleRefreshParsedData}
+          disabled={refreshingDocs}
+          className="inline-flex items-center justify-center rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-700 transition disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {refreshingDocs ? "Refreshing data..." : "Refresh parsed data"}
+        </button>
+      </header>
+
+      <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <DashboardCard title="Total Expenses" subtitle={`This year (${currentYear})`} amount={displayTotals.totalExpensesYear} />
+        <DashboardCard title="Total Income" subtitle={`This year (${currentYear})`} amount={displayTotals.totalIncomeYear} />
+        <DashboardCard
+          title="Net Amount"
+          subtitle={`This year (${currentYear})`}
+          amount={displayTotals.netAmount}
+          accent={displayTotals.netAmount >= 0 ? "text-emerald-400" : "text-red-400"}
+        />
+        <DashboardCard title="This Month" subtitle={currentMonthName} amount={displayTotals.monthExpenses} />
+      </section>
+
+      <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6 space-y-6">
+            <div>
+              <p className="text-sm uppercase tracking-wide text-slate-400">Expenses Breakdown</p>
+              <h2 className="text-xl font-semibold">Total expenses by category</h2>
+            </div>
+            <div className="space-y-4">
+              {categoryMax === 0 ? (
+                <p className="text-sm text-slate-400">No expenses yet. Upload and parse some bills to see your breakdown.</p>
+              ) : (
+                categoryOrder.map((category) => (
+                  <BreakdownBar
+                    key={category}
+                    label={labelForCategory(category)}
+                    amount={displayCategoryTotals[category] ?? 0}
+                    maxValue={categoryMax}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6 space-y-6">
+            <div>
+              <p className="text-sm uppercase tracking-wide text-slate-400">Income Breakdown</p>
+              <h2 className="text-xl font-semibold">Total income by source</h2>
+            </div>
+            <form onSubmit={handleIncomeSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={incomeForm.amount}
+              onChange={(e) => setIncomeForm((prev) => ({ ...prev, amount: e.target.value }))}
+              placeholder="Amount"
+              className="rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              required
+            />
+            <input
+              type="text"
+              value={incomeForm.source}
+              onChange={(e) => setIncomeForm((prev) => ({ ...prev, source: e.target.value }))}
+              placeholder="Source"
+              className="rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              required
+            />
+            <input
+              type="date"
+              value={incomeForm.date}
+              max={new Date().toISOString().split("T")[0]}
+              onChange={(e) => setIncomeForm((prev) => ({ ...prev, date: e.target.value }))}
+              className="rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              required
+            />
+            <button
+              type="submit"
+              disabled={incomeLoading}
+              className="md:col-span-3 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-emerald-400 transition disabled:opacity-60"
+            >
+              {incomeLoading ? "Adding income..." : "Add income"}
+            </button>
+          </form>
+
+          <div className="space-y-4">
+            {incomeMax === 0 ? (
+              <p className="text-sm text-slate-400">No income entries yet. Add your salary or side gigs above.</p>
+            ) : (
+              Object.entries(displayIncomeSources)
+                .sort(([, a], [, b]) => b - a)
+                .map(([source, total]) => (
+                  <BreakdownBar key={source} label={source} amount={total} maxValue={incomeMax} accent="bg-emerald-400" />
+                ))
+            )}
+          </div>
+
+          <div className="space-y-3 pt-2">
+            {incomeEntries.map((entry) => {
+              const isUpdating = incomeAction?.id === entry.id && incomeAction?.type === "update"
+              const isDeleting = incomeAction?.id === entry.id && incomeAction?.type === "delete"
+              return (
+                <div
+                  key={entry.id}
+                  className="flex flex-col gap-2 rounded-lg border border-slate-800 bg-slate-900/40 p-4 md:flex-row md:items-center md:justify-between"
+                >
+                  <div>
+                    <p className="font-medium text-slate-100">{entry.source}</p>
+                    <p className="text-xs text-slate-500">{formatDisplayDate(entry.date)}</p>
+                  </div>
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={incomeEdits[entry.id] ?? ""}
+                      onChange={(e) => handleIncomeAmountChange(entry.id, e.target.value)}
+                      className="rounded-md border border-slate-700 bg-slate-900/50 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleSaveIncome(entry.id)}
+                        disabled={isUpdating || isDeleting}
+                        className="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-medium text-slate-900 hover:bg-emerald-400 disabled:opacity-60"
+                      >
+                        {isUpdating ? "Saving..." : "Save"}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteIncome(entry.id)}
+                        disabled={isDeleting || isUpdating}
+                        className="rounded-md border border-red-500 px-3 py-1.5 text-sm font-medium text-red-400 hover:bg-red-500/10 disabled:opacity-60"
+                      >
+                        {isDeleting ? "Removing..." : "Delete"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function DashboardCard({
+  title,
+  subtitle,
+  amount,
+  accent = "text-slate-100",
+}: {
+  title: string
+  subtitle: string
+  amount: number
+  accent?: string
+}) {
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-5">
+      <p className="text-sm uppercase tracking-wide text-slate-400">{title}</p>
+      <p className={cn("text-3xl font-semibold mt-2", accent)}>{formatter.format(amount || 0)}</p>
+      <p className="text-xs text-slate-500 mt-1">{subtitle}</p>
+    </div>
+  )
+}
+
+function BreakdownBar({
+  label,
+  amount,
+  maxValue,
+  accent = "bg-indigo-500",
+}: {
+  label: string
+  amount: number
+  maxValue: number
+  accent?: string
+}) {
+  const widthPercent = maxValue ? Math.max((amount / maxValue) * 100, 4) : 0
+  return (
+    <div>
+      <div className="flex items-center justify-between text-sm text-slate-300">
+        <span>{label}</span>
+        <span>{formatter.format(amount || 0)}</span>
+      </div>
+      <div className="mt-2 h-2 rounded-full bg-slate-800">
+        <div className={cn("h-full rounded-full transition-all", accent)} style={{ width: `${widthPercent}%` }} />
+      </div>
+    </div>
+  )
+}
+
+function resolveDocDate(doc: BillDocument): Date | null {
+  const candidates: (Date | string | null | undefined)[] = [doc.dueDate, doc.issueDate, doc.periodEnd, doc.periodStart, doc.uploadedAt]
+  for (const candidate of candidates) {
+    const parsed = candidate instanceof Date ? candidate : candidate ? new Date(candidate) : null
+    if (parsed && !Number.isNaN(parsed.getTime())) {
+      return parsed
+    }
+  }
+  return null
+}
+
+function mapProvider(providerId?: string | null, category?: string | null): (typeof categoryOrder)[number] {
+  if (providerId === "expensas" || category === "hoa") {
+    return "hoa"
+  }
+  switch (providerId) {
+    case "edesur":
+      return "electricity"
+    case "aysa":
+      return "water"
+    case "metrogas":
+      return "gas"
+    case "telecentro":
+      return "internet"
+    case "visa":
+    case "mastercard":
+      return "credit_card"
+    default:
+      return "other"
+  }
+}
+
+async function fetchExpenses(token: string): Promise<DashboardDocument[]> {
+  const response = await fetch("/api/documents", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}))
+    throw new Error(data.error ?? "Failed to fetch documents")
+  }
+  const payload = await response.json()
+  return (payload.documents ?? []).map((doc: Partial<BillDocument> & { id: string }) => ({
+    ...doc,
+    uploadedAt: normalizeDateInput(doc.uploadedAt),
+  }))
+}
+
+async function fetchIncomeEntries(token: string): Promise<IncomeEntry[]> {
+  const response = await fetch("/api/income", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}))
+    throw new Error(data.error ?? "Failed to fetch income entries")
+  }
+  const payload = await response.json()
+  return (payload.entries ?? []).map((entry: any) => ({
+    id: entry.id,
+    amount: entry.amount ?? 0,
+    source: entry.source ?? "Unknown",
+    date: normalizeDateInput(entry.date),
+  }))
+}
+
+async function fetchDashboardSummary(token: string): Promise<DashboardSummary | null> {
+  const response = await fetch("/api/dashboard-summary", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+  if (!response.ok) {
+    return null
+  }
+  const payload = await response.json()
+  return payload.summary ?? null
+}
+
+function labelForCategory(category: (typeof categoryOrder)[number]) {
+  switch (category) {
+    case "electricity":
+      return "Electricity"
+    case "water":
+      return "Water"
+    case "gas":
+      return "Gas"
+    case "internet":
+      return "Mobile / Internet"
+    case "hoa":
+      return "Home / HOA"
+    case "credit_card":
+      return "Credit Card"
+    default:
+      return "Other"
+  }
+}
+
+function defaultCategoryTotals(): Record<string, number> {
+  return {
+    electricity: 0,
+    water: 0,
+    gas: 0,
+    internet: 0,
+    hoa: 0,
+    credit_card: 0,
+    other: 0,
+  }
+}
+
+function formatDisplayDate(value: Date | string) {
+  const date = value instanceof Date ? value : new Date(value)
+  return date.toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "numeric" })
+}
+
+function normalizeDateInput(value: unknown): Date {
+  if (value instanceof Date) {
+    return value
+  }
+  if (value && typeof value === "object" && "toDate" in (value as Record<string, unknown>)) {
+    try {
+      return (value as { toDate: () => Date }).toDate()
+    } catch {
+      return new Date()
+    }
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? new Date() : parsed
+  }
+  return new Date()
+}

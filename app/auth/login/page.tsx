@@ -13,6 +13,12 @@ export default function LoginPage() {
 
   const handleGoogleLogin = async () => {
     setLoading(true)
+    if (!auth) {
+      console.error("Firebase auth is not configured. Cannot sign in.")
+      setLoading(false)
+      return
+    }
+
     try {
       const provider = new GoogleAuthProvider()
       await signInWithPopup(auth, provider)

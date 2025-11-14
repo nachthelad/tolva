@@ -1,38 +1,49 @@
-import { initializeApp } from "firebase/app"
-import { getFirestore, collection, addDoc } from "firebase/firestore"
+import dotenv from "dotenv"
+import { cert, getApps, initializeApp } from "firebase-admin/app"
+import { getFirestore } from "firebase-admin/firestore"
 
-const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.FIREBASE_APP_ID,
+import { PROVIDERS } from "../lib/providers"
+
+dotenv.config({ path: ".env.local" })
+dotenv.config()
+
+const requiredEnv = [
+  "FIREBASE_PROJECT_ID",
+  "FIREBASE_CLIENT_EMAIL",
+  "FIREBASE_PRIVATE_KEY",
+] as const
+
+const missing = requiredEnv.filter((key) => !process.env[key])
+
+if (missing.length > 0) {
+  throw new Error(`Missing required Firebase env variables: ${missing.join(", ")}`)
 }
 
-const app = initializeApp(firebaseConfig)
-const firestore = getFirestore(app)
+const app =
+  getApps().length > 0
+    ? getApps()[0]
+    : initializeApp({
+        credential: cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+        }),
+      })
 
-const providers = [
-  { name: "Electric Company", category: "Utilities" },
-  { name: "Water Department", category: "Utilities" },
-  { name: "Internet Provider", category: "Communications" },
-  { name: "Mobile Phone", category: "Communications" },
-  { name: "Gym Membership", category: "Fitness" },
-  { name: "Streaming Service", category: "Entertainment" },
-]
+const db = getFirestore(app)
 
 async function seedProviders() {
-  try {
-    console.log("Seeding providers...")
-    for (const provider of providers) {
-      await addDoc(collection(firestore, "providers"), provider)
-    }
-    console.log("✓ Providers seeded successfully")
-  } catch (error) {
-    console.error("Error seeding providers:", error)
+  console.log("Seeding providers...")
+
+  for (const provider of PROVIDERS) {
+    await db.collection("providers").doc(provider.id).set(provider)
   }
+
+  console.log("Providers seeded successfully")
   process.exit(0)
 }
 
-seedProviders()
+seedProviders().catch((error) => {
+  console.error("Failed to seed providers:", error)
+  process.exit(1)
+})
