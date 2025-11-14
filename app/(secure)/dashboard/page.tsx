@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import type { BillDocument } from "@/lib/firestore-helpers"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
+import { Eye, EyeOff } from "lucide-react"
 type DashboardDocument = Omit<BillDocument, "uploadedAt"> & { uploadedAt: Date }
 
 const formatter = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" })
@@ -61,6 +62,7 @@ export default function DashboardPage() {
     source: "Salary",
     date: new Date().toISOString().split("T")[0],
   })
+  const [showAmounts, setShowAmounts] = useState(true)
 
   useEffect(() => {
     if (!user) return
@@ -395,25 +397,52 @@ useEffect(() => {
           {error && <p className="text-sm text-red-400 mt-2">{error}</p>}
           {refreshMessage && <p className="text-sm text-emerald-400 mt-1">{refreshMessage}</p>}
         </div>
-        <button
-          onClick={handleRefreshParsedData}
-          disabled={refreshingDocs}
-          className="inline-flex items-center justify-center rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-700 transition disabled:opacity-60 disabled:cursor-not-allowed"
-        >
-          {refreshingDocs ? "Refreshing data..." : "Refresh parsed data"}
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowAmounts((prev) => !prev)}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-700 bg-slate-900/60 text-slate-300 hover:bg-slate-800"
+            aria-pressed={!showAmounts}
+            title={showAmounts ? "Hide amounts" : "Show amounts"}
+          >
+            {showAmounts ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </button>
+          <button
+            onClick={handleRefreshParsedData}
+            disabled={refreshingDocs}
+            className="inline-flex items-center justify-center rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-700 transition disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {refreshingDocs ? "Refreshing data..." : "Refresh parsed data"}
+          </button>
+        </div>
       </header>
 
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <DashboardCard title="Total Expenses" subtitle={`This year (${currentYear})`} amount={displayTotals.totalExpensesYear} />
-        <DashboardCard title="Total Income" subtitle={`This year (${currentYear})`} amount={displayTotals.totalIncomeYear} />
+        <DashboardCard
+          title="Total Expenses"
+          subtitle={`This year (${currentYear})`}
+          amount={displayTotals.totalExpensesYear}
+          hidden={!showAmounts}
+        />
+        <DashboardCard
+          title="Total Income"
+          subtitle={`This year (${currentYear})`}
+          amount={displayTotals.totalIncomeYear}
+          hidden={!showAmounts}
+        />
         <DashboardCard
           title="Net Amount"
           subtitle={`This year (${currentYear})`}
           amount={displayTotals.netAmount}
           accent={displayTotals.netAmount >= 0 ? "text-emerald-400" : "text-red-400"}
+          hidden={!showAmounts}
         />
-        <DashboardCard title="This Month" subtitle={currentMonthName} amount={displayTotals.monthExpenses} />
+        <DashboardCard
+          title="This Month"
+          subtitle={currentMonthName}
+          amount={displayTotals.monthExpenses}
+          hidden={!showAmounts}
+        />
       </section>
 
       <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -432,6 +461,7 @@ useEffect(() => {
                     label={labelForCategory(category)}
                     amount={displayCategoryTotals[category] ?? 0}
                     maxValue={categoryMax}
+                    hidden={!showAmounts}
                   />
                 ))
               )}
@@ -486,7 +516,14 @@ useEffect(() => {
               Object.entries(displayIncomeSources)
                 .sort(([, a], [, b]) => b - a)
                 .map(([source, total]) => (
-                  <BreakdownBar key={source} label={source} amount={total} maxValue={incomeMax} accent="bg-emerald-400" />
+                  <BreakdownBar
+                    key={source}
+                    label={source}
+                    amount={total}
+                    maxValue={incomeMax}
+                    accent="bg-emerald-400"
+                    hidden={!showAmounts}
+                  />
                 ))
             )}
           </div>
@@ -495,6 +532,7 @@ useEffect(() => {
             {incomeEntries.map((entry) => {
               const isUpdating = incomeAction?.id === entry.id && incomeAction?.type === "update"
               const isDeleting = incomeAction?.id === entry.id && incomeAction?.type === "delete"
+              const displayValue = showAmounts ? incomeEdits[entry.id] ?? "" : "••••"
               return (
                 <div
                   key={entry.id}
@@ -506,24 +544,25 @@ useEffect(() => {
                   </div>
                   <div className="flex flex-col gap-2 md:flex-row md:items-center">
                     <input
-                      type="number"
+                      type={showAmounts ? "number" : "text"}
                       min="0"
                       step="0.01"
-                      value={incomeEdits[entry.id] ?? ""}
-                      onChange={(e) => handleIncomeAmountChange(entry.id, e.target.value)}
+                      value={displayValue}
+                      readOnly={!showAmounts}
+                      onChange={(e) => showAmounts && handleIncomeAmountChange(entry.id, e.target.value)}
                       className="rounded-md border border-slate-700 bg-slate-900/50 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleSaveIncome(entry.id)}
-                        disabled={isUpdating || isDeleting}
+                        disabled={isUpdating || isDeleting || !showAmounts}
                         className="rounded-md bg-emerald-500 px-3 py-1.5 text-sm font-medium text-slate-900 hover:bg-emerald-400 disabled:opacity-60"
                       >
                         {isUpdating ? "Saving..." : "Save"}
                       </button>
                       <button
                         onClick={() => handleDeleteIncome(entry.id)}
-                        disabled={isDeleting || isUpdating}
+                        disabled={isDeleting || isUpdating || !showAmounts}
                         className="rounded-md border border-red-500 px-3 py-1.5 text-sm font-medium text-red-400 hover:bg-red-500/10 disabled:opacity-60"
                       >
                         {isDeleting ? "Removing..." : "Delete"}
@@ -545,16 +584,18 @@ function DashboardCard({
   subtitle,
   amount,
   accent = "text-slate-100",
+  hidden = false,
 }: {
   title: string
   subtitle: string
   amount: number
   accent?: string
+  hidden?: boolean
 }) {
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-5">
       <p className="text-sm uppercase tracking-wide text-slate-400">{title}</p>
-      <p className={cn("text-3xl font-semibold mt-2", accent)}>{formatter.format(amount || 0)}</p>
+      <p className={cn("text-3xl font-semibold mt-2", accent)}>{hidden ? "••••" : formatter.format(amount || 0)}</p>
       <p className="text-xs text-slate-500 mt-1">{subtitle}</p>
     </div>
   )
@@ -565,18 +606,20 @@ function BreakdownBar({
   amount,
   maxValue,
   accent = "bg-indigo-500",
+  hidden = false,
 }: {
   label: string
   amount: number
   maxValue: number
   accent?: string
+  hidden?: boolean
 }) {
   const widthPercent = maxValue ? Math.max((amount / maxValue) * 100, 4) : 0
   return (
     <div>
       <div className="flex items-center justify-between text-sm text-slate-300">
         <span>{label}</span>
-        <span>{formatter.format(amount || 0)}</span>
+        <span>{hidden ? "••••" : formatter.format(amount || 0)}</span>
       </div>
       <div className="mt-2 h-2 rounded-full bg-slate-800">
         <div className={cn("h-full rounded-full transition-all", accent)} style={{ width: `${widthPercent}%` }} />
