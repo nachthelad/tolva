@@ -1,5 +1,5 @@
 import { getApps, initializeApp, type FirebaseApp, type FirebaseOptions } from "firebase/app"
-import { getAuth, type Auth } from "firebase/auth"
+import { browserLocalPersistence, getAuth, setPersistence, type Auth } from "firebase/auth"
 import { getFirestore, type Firestore } from "firebase/firestore"
 import { getStorage, type FirebaseStorage } from "firebase/storage"
 
@@ -43,9 +43,15 @@ if (missingKeys.length > 0) {
 } else {
   try {
     const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig)
+    const authInstance = getAuth(app)
+    if (typeof window !== "undefined") {
+      setPersistence(authInstance, browserLocalPersistence).catch((error) => {
+        console.warn("Failed to set Firebase auth persistence:", error)
+      })
+    }
     services = {
       app,
-      auth: getAuth(app),
+      auth: authInstance,
       firestore: getFirestore(app),
       storage: getStorage(app),
     }

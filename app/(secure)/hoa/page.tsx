@@ -42,7 +42,8 @@ export default function HoaPage() {
   const [summaries, setSummaries] = useState<HoaSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedUnitKey, setSelectedUnitKey] = useState<string>(PRIMARY_UNIT_CODE);
+  const [selectedUnitKey, setSelectedUnitKey] =
+    useState<string>(PRIMARY_UNIT_CODE);
 
   useEffect(() => {
     if (!user) return;
@@ -93,9 +94,9 @@ export default function HoaPage() {
         key,
         buildingCode: summary.buildingCode ?? "N/A",
         unitCode: summary.unitCode,
-        label: `${summary.buildingAddress ?? summary.buildingCode ?? "Building"} - Unit ${
-          summary.unitLabel ?? summary.unitCode
-        }`,
+        label: `${
+          summary.buildingAddress ?? summary.buildingCode ?? "Building"
+        } - Unit ${summary.unitLabel ?? summary.unitCode}`,
       });
     });
     return Array.from(map.values());
@@ -331,7 +332,7 @@ export default function HoaPage() {
                     {(currentSummary.rubros ?? []).map((rubro) => (
                       <div
                         key={`${rubro.rubroNumber}-${rubro.label}`}
-                        className="rounded-lg border border-slate-800/80 bg-slate-950/60 px-4 py-3"
+                        className="rounded-lg border border-slate-800/80 bg-slate-900/70 px-4 py-3"
                       >
                         <p className="text-sm text-slate-400">
                           {rubro.label ?? `Rubro ${rubro.rubroNumber}`}
