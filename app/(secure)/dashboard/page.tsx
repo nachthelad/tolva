@@ -17,10 +17,11 @@ import Link from "next/link"
 import { cn } from "@/lib/utils"
 import { fetchIncomeEntries, type IncomeEntry } from "@/lib/income-client"
 import { Eye, EyeOff } from "lucide-react"
+import { CATEGORY_OPTIONS, type CategoryValue, normalizeCategory } from "@/lib/categories"
 type DashboardDocument = Omit<BillDocument, "uploadedAt"> & { uploadedAt: Date }
 
 const formatter = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" })
-const categoryOrder = ["electricity", "water", "gas", "internet", "hoa", "credit_card", "other"] as const
+const categoryOrder = CATEGORY_OPTIONS.map((option) => option.value) as CategoryValue[]
 
 type DashboardSummary = {
   totals: {
@@ -29,7 +30,7 @@ type DashboardSummary = {
     netAmount: number
     monthExpenses: number
   }
-  categories: Record<string, number>
+  categories: Record<CategoryValue, number>
   incomeSources: Record<string, number>
   updatedAt?: string | null
 }
@@ -94,15 +95,7 @@ useEffect(() => {
       year: 0,
       month: 0,
     }
-    const categoryTotals: Record<(typeof categoryOrder)[number], number> = {
-      electricity: 0,
-      water: 0,
-      gas: 0,
-      internet: 0,
-      hoa: 0,
-      credit_card: 0,
-      other: 0,
-    }
+    const categoryTotals: Record<CategoryValue, number> = defaultCategoryTotals()
 
     docs.forEach((doc) => {
       const amount = doc.totalAmount ?? 0
@@ -114,7 +107,11 @@ useEffect(() => {
         if (docDate.getMonth() === new Date().getMonth()) {
           totals.month += amount
         }
-        const categoryKey = mapProvider(doc.providerId, doc.category)
+        const categoryKey = normalizeCategory(
+          doc.providerId,
+          doc.category,
+          doc.provider ?? doc.providerNameDetected ?? null,
+        )
         categoryTotals[categoryKey] += amount
       }
     })
@@ -423,27 +420,6 @@ function resolveDocDate(doc: BillDocument): Date | null {
   return null
 }
 
-function mapProvider(providerId?: string | null, category?: string | null): (typeof categoryOrder)[number] {
-  if (providerId === "expensas" || category === "hoa") {
-    return "hoa"
-  }
-  switch (providerId) {
-    case "edesur":
-      return "electricity"
-    case "aysa":
-      return "water"
-    case "metrogas":
-      return "gas"
-    case "telecentro":
-      return "internet"
-    case "visa":
-    case "mastercard":
-      return "credit_card"
-    default:
-      return "other"
-  }
-}
-
 async function fetchExpenses(token: string): Promise<DashboardDocument[]> {
   const response = await fetch("/api/documents", {
     headers: {
@@ -493,16 +469,11 @@ function labelForCategory(category: (typeof categoryOrder)[number]) {
   }
 }
 
-function defaultCategoryTotals(): Record<string, number> {
-  return {
-    electricity: 0,
-    water: 0,
-    gas: 0,
-    internet: 0,
-    hoa: 0,
-    credit_card: 0,
-    other: 0,
-  }
+function defaultCategoryTotals(): Record<CategoryValue, number> {
+  return categoryOrder.reduce((acc, key) => {
+    acc[key] = 0
+    return acc
+  }, {} as Record<CategoryValue, number>)
 }
 
 function formatDisplayDate(value: Date | string) {

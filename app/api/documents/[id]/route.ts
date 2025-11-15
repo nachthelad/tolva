@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
 
+import { Timestamp } from "firebase-admin/firestore"
+
 import { adminAuth, adminFirestore } from "@/lib/firebase-admin"
 import { serializeDocumentSnapshot } from "@/lib/server/document-serializer"
-import { Timestamp } from "firebase-admin/firestore"
 
 type RouteContext = {
   params: Promise<{ id: string }> | { id: string }
@@ -59,17 +60,24 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     }
 
     const { docRef } = authResult
-    const { provider, amount, dueDate, status } = await request.json()
+    const { provider, amount, dueDate, status, category, issueDate, periodStart, periodEnd } = await request.json()
 
     const updates: Record<string, any> = {}
 
     if (provider !== undefined) updates.provider = provider || null
     if (amount !== undefined) updates.amount = amount ?? null
     if (status) updates.status = status
+    if (category !== undefined) updates.category = category || null
 
-    if (dueDate !== undefined) {
-      updates.dueDate = dueDate ? Timestamp.fromDate(new Date(`${dueDate}T00:00:00Z`)) : null
+    const assignDate = (field: string, value: any) => {
+      if (value === undefined) return
+      updates[field] = value ? Timestamp.fromDate(new Date(`${value}T00:00:00Z`)) : null
     }
+
+    assignDate("dueDate", dueDate)
+    assignDate("issueDate", issueDate)
+    assignDate("periodStart", periodStart)
+    assignDate("periodEnd", periodEnd)
 
     updates.updatedAt = new Date()
 

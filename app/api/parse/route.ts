@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 
 import { adminAuth, adminFirestore } from "@/lib/firebase-admin"
+import { normalizeCategory } from "@/lib/categories"
 
 import { parsePdfWithOpenAI, type BillingParseResult } from "./parser"
 import { Timestamp } from "firebase-admin/firestore"
@@ -69,6 +70,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Failed to parse PDF" }, { status: 502 })
     }
 
+    const detectedCategory = normalizeCategory(
+      parseResponse.providerId ?? documentData?.providerId,
+      parseResponse.category ?? documentData?.category,
+      parseResponse.providerNameDetected ?? documentData?.provider ?? documentData?.providerNameDetected ?? null,
+    )
+
     const updatePayload: Record<string, any> = {
       textExtract: parseResponse.text ?? documentData?.textExtract ?? null,
       providerId: parseResponse.providerId ?? documentData?.providerId ?? null,
@@ -79,7 +86,7 @@ export async function POST(request: NextRequest) {
         documentData?.provider ??
         documentData?.providerNameDetected ??
         null,
-      category: parseResponse.category ?? documentData?.category ?? null,
+      category: detectedCategory,
       totalAmount: parseResponse.totalAmount ?? documentData?.totalAmount ?? null,
       amount: parseResponse.totalAmount ?? documentData?.amount ?? null,
       currency: parseResponse.currency ?? documentData?.currency ?? null,

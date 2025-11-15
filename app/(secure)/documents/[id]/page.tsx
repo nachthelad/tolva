@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { ChevronLeft, Trash2 } from "lucide-react";
+import { CATEGORY_OPTIONS } from "@/lib/categories";
 
 export default function DocumentDetailPage() {
   const { user } = useAuth();
@@ -33,7 +34,12 @@ export default function DocumentDetailPage() {
       provider: doc.provider ?? doc.providerNameDetected ?? "",
       amount: doc.amount ?? doc.totalAmount ?? undefined,
       dueDate: doc.dueDate ?? "",
+      issueDate: doc.issueDate ?? "",
+      periodStart: doc.periodStart ?? "",
+      periodEnd: doc.periodEnd ?? "",
       status: doc.status,
+      category: doc.category ?? "",
+      currency: doc.currency ?? "ARS",
     });
   };
 
@@ -112,6 +118,10 @@ export default function DocumentDetailPage() {
           provider: formData.provider ?? null,
           amount: formData.amount ?? null,
           dueDate: formData.dueDate ?? null,
+          issueDate: formData.issueDate ?? null,
+          periodStart: formData.periodStart ?? null,
+          periodEnd: formData.periodEnd ?? null,
+          category: formData.category ?? null,
           status: formData.status ?? document?.status ?? "pending",
         }),
       });
@@ -334,6 +344,28 @@ export default function DocumentDetailPage() {
             </div>
 
             <div>
+              <label className="text-sm font-medium block mb-2">Category</label>
+              <select
+                value={(formData.category as string) || ""}
+                onChange={(e) =>
+                  setFormData((prev) => ({
+                    ...prev,
+                    category: e.target.value,
+                  }))
+                }
+                disabled={!editing}
+                className="w-full px-3 py-2 border border-slate-800 rounded-md bg-slate-900/40 text-slate-100 disabled:opacity-60 disabled:bg-slate-900/20"
+              >
+                <option value="">Select category</option>
+                {CATEGORY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
               <label className="text-sm font-medium block mb-2">Amount</label>
               <input
                 type="number"
@@ -345,6 +377,19 @@ export default function DocumentDetailPage() {
                       ? Number.parseFloat(e.target.value)
                       : undefined,
                   }))
+                }
+                disabled={!editing}
+                className="w-full px-3 py-2 border border-slate-800 rounded-md bg-slate-900/40 text-slate-100 placeholder:text-slate-500 disabled:opacity-60 disabled:bg-slate-900/20"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium block mb-2">Issue Date</label>
+              <input
+                type="date"
+                value={(formData.issueDate as string) || ""}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, issueDate: e.target.value }))
                 }
                 disabled={!editing}
                 className="w-full px-3 py-2 border border-slate-800 rounded-md bg-slate-900/40 text-slate-100 placeholder:text-slate-500 disabled:opacity-60 disabled:bg-slate-900/20"
@@ -382,6 +427,32 @@ export default function DocumentDetailPage() {
                 <option value="needs_review">Needs Review</option>
                 <option value="error">Error</option>
               </select>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium block mb-2">Period Start</label>
+              <input
+                type="date"
+                value={(formData.periodStart as string) || ""}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, periodStart: e.target.value }))
+                }
+                disabled={!editing}
+                className="w-full px-3 py-2 border border-slate-800 rounded-md bg-slate-900/40 text-slate-100 placeholder:text-slate-500 disabled:opacity-60 disabled:bg-slate-900/20"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium block mb-2">Period End</label>
+              <input
+                type="date"
+                value={(formData.periodEnd as string) || ""}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, periodEnd: e.target.value }))
+                }
+                disabled={!editing}
+                className="w-full px-3 py-2 border border-slate-800 rounded-md bg-slate-900/40 text-slate-100 placeholder:text-slate-500 disabled:opacity-60 disabled:bg-slate-900/20"
+              />
             </div>
           </div>
 
