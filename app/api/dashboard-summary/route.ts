@@ -7,6 +7,7 @@ import {
 } from "@/lib/server/authenticate-request"
 import { createRequestLogger } from "@/lib/server/logger"
 import { Timestamp } from "firebase-admin/firestore"
+import { dashboardSummarySchema } from "@/lib/api-schemas"
 
 const COLLECTION = "dashboardSummaries"
 
@@ -25,14 +26,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ summary: null })
     }
     const data = snapshot.data()
-    return NextResponse.json({
-      summary: {
-        totals: data?.totals ?? null,
-        categories: data?.categories ?? null,
-        incomeSources: data?.incomeSources ?? null,
-        updatedAt: data?.updatedAt?.toDate ? data.updatedAt.toDate().toISOString() : data?.updatedAt ?? null,
-      },
-    })
+    const payload = {
+      summary: data
+        ? {
+            totals: data?.totals ?? {},
+            categories: data?.categories ?? {},
+            incomeSources: data?.incomeSources ?? {},
+            updatedAt: data?.updatedAt?.toDate ? data.updatedAt.toDate().toISOString() : data?.updatedAt ?? null,
+          }
+        : null,
+    }
+
+    const parsed = dashboardSummarySchema.nullable().safeParse(payload.summary)
+    return NextResponse.json({ summary: parsed.success ? parsed.data : null })
   } catch (error) {
     const authResponse = handleAuthError(error)
     if (authResponse) {
@@ -56,12 +62,17 @@ export async function POST(request: NextRequest) {
     const { uid } = await authenticateRequest(request)
     log = log.withContext({ userId: uid })
     const payload = await request.json()
+    const parsed = dashboardSummarySchema.safeParse(payload)
+    if (!parsed.success) {
+      log.warn("Invalid dashboard summary payload", { issues: parsed.error.issues })
+      return NextResponse.json({ error: "Invalid dashboard summary" }, { status: 400 })
+    }
     const docRef = getAdminFirestore().collection(COLLECTION).doc(uid)
     await docRef.set(
       {
-        totals: payload.totals ?? {},
-        categories: payload.categories ?? {},
-        incomeSources: payload.incomeSources ?? {},
+        totals: parsed.data.totals,
+        categories: parsed.data.categories,
+        incomeSources: parsed.data.incomeSources,
         updatedAt: Timestamp.now(),
       },
       { merge: true },

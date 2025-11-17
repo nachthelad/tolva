@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { useRouter } from "next/navigation"
 import { uploadBillFile } from "@/lib/storage-helpers"
@@ -18,6 +18,7 @@ import {
   formatMaxUploadSize,
   validateUploadConstraints,
 } from "@/lib/upload-constraints"
+import { createApiClient, type CreateDocumentInput } from "@/lib/api-client"
 
 export default function UploadPage() {
   const { user } = useAuth()
@@ -40,6 +41,11 @@ export default function UploadPage() {
   })
 
   const uploadRequirementsCopy = `${describeAllowedFileTypes()} up to ${formatMaxUploadSize()}.`
+
+  const apiClient = useMemo(() => {
+    if (!user) return null
+    return createApiClient({ getToken: () => user.getIdToken() })
+  }, [user])
 
   const validateFile = useCallback((selectedFile?: File) => {
     if (!selectedFile) {
@@ -83,61 +89,22 @@ export default function UploadPage() {
   }
 
   const handleUpload = async () => {
-    if (!file || !user) return
+    if (!file || !user || !apiClient) return
     setLoading(true)
     setError(null)
 
     try {
       let storageUrl: string | null = null
-      const token = await user.getIdToken()
 
       const uploadViaApi = async () => {
-        const formData = new FormData()
-        formData.append("file", file)
-        formData.append("fileName", file.name)
-
-        const response = await fetch("/api/upload", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          body: formData,
-        })
-
-        const data = await response.json().catch(() => ({}))
-        if (!response.ok) {
-          const serverError =
-            typeof data.error === "string"
-              ? data.error
-              : typeof data.error?.message === "string"
-                ? data.error.message
-                : null
-          throw new Error(serverError ?? "Server upload failed")
-        }
-
-        return data.storageUrl as string
+        return apiClient.uploadFile(file, file.name)
       }
 
       const createDocumentViaApi = async (storageUrlValue: string) => {
-        const response = await fetch("/api/documents", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            fileName: file.name,
-            storageUrl: storageUrlValue,
-          }),
+        return apiClient.createDocument({
+          fileName: file.name,
+          storageUrl: storageUrlValue,
         })
-
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}))
-          throw new Error(data.error ?? "Failed to save document")
-        }
-
-        const data = await response.json()
-        return data.documentId as string
       }
 
       try {
@@ -171,19 +138,7 @@ export default function UploadPage() {
       // Trigger parsing (call API route) - fire and forget
       void (async () => {
         try {
-          const parseResponse = await fetch("/api/parse", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({ documentId: docId }),
-          })
-
-          if (!parseResponse.ok) {
-            const data = await parseResponse.json().catch(() => ({}))
-            console.warn("Parser service unavailable:", data.error)
-          }
+          await apiClient.triggerParse(docId)
         } catch (parseError) {
           console.warn("Parser request failed:", parseError)
         }
@@ -197,43 +152,30 @@ export default function UploadPage() {
   }
 
   const handleManualSubmit = async () => {
-    if (!user) return
+    if (!user || !apiClient) return
     setManualLoading(true)
     setManualError(null)
     try {
-      const token = await user.getIdToken()
-      const response = await fetch("/api/documents", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          fileName:
-            manualForm.provider?.trim() || manualForm.category?.trim()
-              ? `${manualForm.provider?.trim() || manualForm.category?.trim()} (manual)`
-              : `Manual Bill ${new Date().toISOString().slice(0, 10)}`,
-          storageUrl: null,
-          provider: manualForm.provider || null,
-          category: manualForm.category || null,
-          amount: manualForm.amount ?? null,
-          currency: manualForm.currency || null,
-          dueDate: manualForm.dueDate || null,
-          issueDate: manualForm.issueDate || null,
-          periodStart: manualForm.periodStart || null,
-          periodEnd: manualForm.periodEnd || null,
-          manualEntry: true,
-          textExtract: null,
-        }),
-      })
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}))
-        throw new Error(data.error ?? "Failed to save manual bill")
+      const payload: CreateDocumentInput = {
+        fileName:
+          manualForm.provider?.trim() || manualForm.category?.trim()
+            ? `${manualForm.provider?.trim() || manualForm.category?.trim()} (manual)`
+            : `Manual Bill ${new Date().toISOString().slice(0, 10)}`,
+        storageUrl: null,
+        provider: manualForm.provider?.trim() || null,
+        category: manualForm.category || null,
+        amount: manualForm.amount ?? null,
+        currency: manualForm.currency || null,
+        dueDate: manualForm.dueDate || null,
+        issueDate: manualForm.issueDate || null,
+        periodStart: manualForm.periodStart || null,
+        periodEnd: manualForm.periodEnd || null,
+        manualEntry: true,
+        textExtract: null,
       }
 
-      const data = await response.json()
-      router.push(`/documents/${data.documentId}`)
+      const documentId = await apiClient.createDocument(payload)
+      router.push(`/documents/${documentId}`)
     } catch (err) {
       console.error("Manual doc error:", err)
       setManualError(err instanceof Error ? err.message : "Failed to save manual bill")

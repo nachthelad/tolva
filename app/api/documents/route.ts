@@ -4,6 +4,7 @@ import { Timestamp } from "firebase-admin/firestore"
 
 import { getAdminFirestore } from "@/lib/firebase-admin"
 import { serializeDocumentSnapshot } from "@/lib/server/document-serializer"
+import { createDocumentRequestSchema } from "@/lib/api-schemas"
 import {
   authenticateRequest,
   handleAuthError,
@@ -22,6 +23,13 @@ export async function POST(request: NextRequest) {
     const { uid } = await authenticateRequest(request)
     log = log.withContext({ userId: uid })
     const payload = await request.json()
+    const parsed = createDocumentRequestSchema.safeParse(payload)
+
+    if (!parsed.success) {
+      log.warn("Invalid document payload", { issues: parsed.error.issues })
+      return NextResponse.json({ error: "Invalid document payload" }, { status: 400 })
+    }
+
     const {
       fileName,
       storageUrl,
@@ -37,11 +45,7 @@ export async function POST(request: NextRequest) {
       periodEnd,
       manualEntry,
       textExtract,
-    } = payload ?? {}
-
-    if (!fileName) {
-      return NextResponse.json({ error: "Missing fileName" }, { status: 400 })
-    }
+    } = parsed.data
 
     const toTimestamp = (value?: string | null) => {
       if (!value) return null

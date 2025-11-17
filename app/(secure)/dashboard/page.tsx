@@ -19,22 +19,11 @@ import { fetchIncomeEntries, type IncomeEntry } from "@/lib/income-client"
 import { Eye, EyeOff } from "lucide-react"
 import { CATEGORY_OPTIONS, type CategoryValue } from "@/config/billing/categories"
 import { normalizeCategory } from "@/lib/category-utils"
+import { createApiClient, type DashboardSummary } from "@/lib/api-client"
 type DashboardDocument = Omit<BillDocument, "uploadedAt"> & { uploadedAt: Date }
 
 const formatter = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" })
 const categoryOrder = CATEGORY_OPTIONS.map((option) => option.value) as CategoryValue[]
-
-type DashboardSummary = {
-  totals: {
-    totalExpensesYear: number
-    totalIncomeYear: number
-    netAmount: number
-    monthExpenses: number
-  }
-  categories: Record<CategoryValue, number>
-  incomeSources: Record<string, number>
-  updatedAt?: string | null
-}
 
 export default function DashboardPage() {
   const { user } = useAuth()
@@ -47,39 +36,62 @@ export default function DashboardPage() {
   const [summaryFallback, setSummaryFallback] = useState<DashboardSummary | null>(null)
   const [showAmounts, setShowAmounts] = useState(true)
 
-  useEffect(() => {
-    if (!user) return
-    setLoading(true)
-    ;(async () => {
-      try {
-        const token = await user.getIdToken()
-        const [docs, incomes] = await Promise.all([fetchExpenses(token), fetchIncomeEntries(token)])
-        setExpenseDocs(docs)
-        setIncomeEntries(incomes)
-        setError(null)
-      } catch (err) {
-        console.error("Dashboard load error", err)
-        setError("Failed to load dashboard data.")
-      } finally {
-        setLoading(false)
-      }
-    })()
+  const apiClient = useMemo(() => {
+    if (!user) return null
+    return createApiClient({ getToken: () => user.getIdToken() })
   }, [user])
 
-useEffect(() => {
-  if (!user) return
-  ;(async () => {
-    try {
-      const token = await user.getIdToken()
-        const summary = await fetchDashboardSummary(token)
-        if (summary) {
+  useEffect(() => {
+    if (!user || !apiClient) return
+    setLoading(true)
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [docs, incomes] = await Promise.all([
+          apiClient.listDocuments(),
+          (async () => {
+            const token = await user.getIdToken()
+            return fetchIncomeEntries(token)
+          })(),
+        ])
+        if (!cancelled) {
+          setExpenseDocs(docs)
+          setIncomeEntries(incomes)
+          setError(null)
+        }
+      } catch (err) {
+        console.error("Dashboard load error", err)
+        if (!cancelled) {
+          setError("Failed to load dashboard data.")
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [apiClient, user])
+
+  useEffect(() => {
+    if (!user || !apiClient) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const summary = await apiClient.fetchDashboardSummary()
+        if (!cancelled && summary) {
           setSummaryFallback(summary)
         }
       } catch (err) {
         console.warn("Dashboard summary fetch failed:", err)
       }
     })()
-}, [user])
+    return () => {
+      cancelled = true
+    }
+  }, [apiClient, user])
 
   useEffect(() => {
     if (!refreshMessage) return
@@ -133,7 +145,7 @@ useEffect(() => {
   const netAmount = incomeMetrics.totalIncomeYear - expenseMetrics.totals.year
 
   useEffect(() => {
-    if (!user) return
+    if (!user || !apiClient) return
     if (loading) return
     const hasLiveData = expenseDocs.length > 0 || incomeEntries.length > 0
     if (!hasLiveData) return
@@ -152,20 +164,12 @@ useEffect(() => {
 
     ;(async () => {
       try {
-        const token = await user.getIdToken()
-        await fetch("/api/dashboard-summary", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(payload),
-        })
+        await apiClient.saveDashboardSummary(payload)
       } catch (err) {
         console.warn("Dashboard summary save failed:", err)
       }
     })()
-  }, [user, loading, expenseDocs, incomeEntries, expenseMetrics, incomeMetrics, netAmount])
+  }, [apiClient, user, loading, expenseDocs, incomeEntries, expenseMetrics, incomeMetrics, netAmount])
 
   const fallbackTotals = summaryFallback?.totals ?? {
     totalExpensesYear: 0,
@@ -192,27 +196,19 @@ useEffect(() => {
   const incomeMax = Math.max(...Object.values(displayIncomeSources), 0)
 
   const handleRefreshParsedData = async () => {
-    if (!user) return
+    if (!user || !apiClient) return
     setRefreshingDocs(true)
     setRefreshMessage(null)
     try {
-      const token = await user.getIdToken()
-      const docs = await fetchExpenses(token)
+      const docs = await apiClient.listDocuments()
       const docsNeedingParse = docs.filter((doc) => doc.status !== "parsed" || !doc.totalAmount)
       for (const doc of docsNeedingParse) {
-        await fetch("/api/parse", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ documentId: doc.id }),
-        }).catch((err) => {
+        await apiClient.triggerParse(doc.id).catch((err) => {
           console.warn("Parse refresh failed for", doc.id, err)
         })
       }
 
-      const updatedDocs = await fetchExpenses(token)
+      const updatedDocs = await apiClient.listDocuments()
       setExpenseDocs(updatedDocs)
       setRefreshMessage(
         docsNeedingParse.length ? "Parsed documents refreshed." : "All documents were already up to date.",
@@ -424,36 +420,6 @@ function resolveDocDate(doc: BillDocument): Date | null {
   return null
 }
 
-async function fetchExpenses(token: string): Promise<DashboardDocument[]> {
-  const response = await fetch("/api/documents", {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}))
-    throw new Error(data.error ?? "Failed to fetch documents")
-  }
-  const payload = await response.json()
-  return (payload.documents ?? []).map((doc: Partial<BillDocument> & { id: string }) => ({
-    ...doc,
-    uploadedAt: normalizeDateInput(doc.uploadedAt),
-  }))
-}
-
-async function fetchDashboardSummary(token: string): Promise<DashboardSummary | null> {
-  const response = await fetch("/api/dashboard-summary", {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  })
-  if (!response.ok) {
-    return null
-  }
-  const payload = await response.json()
-  return payload.summary ?? null
-}
-
 function labelForCategory(category: (typeof categoryOrder)[number]) {
   switch (category) {
     case "electricity":
@@ -483,22 +449,4 @@ function defaultCategoryTotals(): Record<CategoryValue, number> {
 function formatDisplayDate(value: Date | string) {
   const date = value instanceof Date ? value : new Date(value)
   return date.toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "numeric" })
-}
-
-function normalizeDateInput(value: unknown): Date {
-  if (value instanceof Date) {
-    return value
-  }
-  if (value && typeof value === "object" && "toDate" in (value as Record<string, unknown>)) {
-    try {
-      return (value as { toDate: () => Date }).toDate()
-    } catch {
-      return new Date()
-    }
-  }
-  if (typeof value === "string" || typeof value === "number") {
-    const parsed = new Date(value)
-    return Number.isNaN(parsed.getTime()) ? new Date() : parsed
-  }
-  return new Date()
 }
