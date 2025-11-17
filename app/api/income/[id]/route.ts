@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 
-import { adminFirestore } from "@/lib/firebase-admin"
+import { getAdminFirestore } from "@/lib/firebase-admin"
 import { Timestamp } from "firebase-admin/firestore"
 import {
   authenticateRequest,
@@ -21,7 +21,7 @@ async function getOwnedIncomeDoc(uid: string, incomeId: string) {
   if (!incomeId) {
     throw new Error("NotFound")
   }
-  const docRef = adminFirestore.collection("incomeEntries").doc(incomeId)
+  const docRef = getAdminFirestore().collection("incomeEntries").doc(incomeId)
   const snapshot = await docRef.get()
   if (!snapshot.exists) {
     throw new Error("NotFound")

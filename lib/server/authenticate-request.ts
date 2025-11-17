@@ -3,7 +3,7 @@ import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 import type { DecodedIdToken } from "firebase-admin/auth"
 
-import { adminAuth } from "@/lib/firebase-admin"
+import { getAdminAuth } from "@/lib/firebase-admin"
 
 export type AuthenticatedRequestContext = {
   uid: string
@@ -86,7 +86,7 @@ async function verifyRequestAuthorization(
   const rawHeader = request.headers.get("authorization") ?? ""
   const token = extractBearerToken(rawHeader)
   try {
-    const decoded = await adminAuth.verifyIdToken(token)
+    const decoded = await getAdminAuth().verifyIdToken(token)
     return {
       uid: decoded.uid,
       email: decoded.email ?? null,

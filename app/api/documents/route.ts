@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 
 import { Timestamp } from "firebase-admin/firestore"
 
-import { adminFirestore } from "@/lib/firebase-admin"
+import { getAdminFirestore } from "@/lib/firebase-admin"
 import { serializeDocumentSnapshot } from "@/lib/server/document-serializer"
 import {
   authenticateRequest,
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
     docData.periodStart = toTimestamp(periodStart)
     docData.periodEnd = toTimestamp(periodEnd)
 
-    const docRef = await adminFirestore.collection("documents").add(docData)
+    const docRef = await getAdminFirestore().collection("documents").add(docData)
 
     return NextResponse.json({ documentId: docRef.id })
   } catch (error) {
@@ -94,7 +94,7 @@ export async function GET(request: NextRequest) {
     const { uid } = await authenticateRequest(request)
     log = log.withContext({ userId: uid })
 
-    const snapshot = await adminFirestore.collection("documents").where("userId", "==", uid).get()
+    const snapshot = await getAdminFirestore().collection("documents").where("userId", "==", uid).get()
 
     const documents = snapshot.docs
       .map((doc) => serializeDocumentSnapshot(doc))

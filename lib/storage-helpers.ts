@@ -1,12 +1,10 @@
-import { storage } from "./firebase"
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage"
+
+import { getFirebaseStorage } from "./firebase"
 import { validateUploadConstraints } from "./upload-constraints"
 
 function getStorageInstance() {
-  if (!storage) {
-    throw new Error("Firebase storage is not configured. Check your Firebase environment variables.")
-  }
-  return storage
+  return getFirebaseStorage()
 }
 
 function bufferToHex(buffer: ArrayBuffer) {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { NextRequest, NextResponse } from "next/server"
 
-import { adminStorage } from "@/lib/firebase-admin"
+import { getAdminStorage } from "@/lib/firebase-admin"
 import {
   authenticateRequest,
   handleAuthError,
@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
     const checksum = createHash("sha256").update(buffer).digest("hex")
     const uploadedAtIso = new Date().toISOString()
     const resumable = file.size >= RESUMABLE_UPLOAD_THRESHOLD_BYTES
-    const bucket = adminStorage.bucket()
+    const bucket = getAdminStorage().bucket()
     await bucket.file(filePath).save(buffer, {
       contentType: file.type || "application/octet-stream",
       resumable,

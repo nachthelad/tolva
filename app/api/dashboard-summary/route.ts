@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 
-import { adminFirestore } from "@/lib/firebase-admin"
+import { getAdminFirestore } from "@/lib/firebase-admin"
 import {
   authenticateRequest,
   handleAuthError,
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
   try {
     const { uid } = await authenticateRequest(request)
     log = log.withContext({ userId: uid })
-    const docRef = adminFirestore.collection(COLLECTION).doc(uid)
+    const docRef = getAdminFirestore().collection(COLLECTION).doc(uid)
     const snapshot = await docRef.get()
     if (!snapshot.exists) {
       return NextResponse.json({ summary: null })
@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
     const { uid } = await authenticateRequest(request)
     log = log.withContext({ userId: uid })
     const payload = await request.json()
-    const docRef = adminFirestore.collection(COLLECTION).doc(uid)
+    const docRef = getAdminFirestore().collection(COLLECTION).doc(uid)
     await docRef.set(
       {
         totals: payload.totals ?? {},

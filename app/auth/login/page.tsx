@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
-import { auth } from "@/lib/firebase";
+import { FirebaseClientInitializationError, getFirebaseAuth } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,10 +19,17 @@ export default function LoginPage() {
 
   const handleGoogleLogin = async () => {
     setLoading(true);
-    if (!auth) {
-      console.error("Firebase auth is not configured. Cannot sign in.");
-      setLoading(false);
-      return;
+
+    let auth;
+    try {
+      auth = getFirebaseAuth();
+    } catch (error) {
+      if (error instanceof FirebaseClientInitializationError) {
+        console.error("Firebase auth is not configured:", error.message);
+        setLoading(false);
+        return;
+      }
+      throw error;
     }
 
     try {
