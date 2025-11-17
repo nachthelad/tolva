@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 
-import { adminFirestore } from "@/lib/firebase-admin"
+import { getAdminFirestore } from "@/lib/firebase-admin"
 import { Timestamp, type DocumentSnapshot } from "firebase-admin/firestore"
 import {
   authenticateRequest,
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     const { uid } = await authenticateRequest(request)
     log = log.withContext({ userId: uid })
 
-    const snapshot = await adminFirestore.collection("incomeEntries").where("userId", "==", uid).get()
+    const snapshot = await getAdminFirestore().collection("incomeEntries").where("userId", "==", uid).get()
 
     const entries = snapshot.docs
       .map(serializeIncomeDoc)
@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid amount" }, { status: 400 })
     }
 
-    const entryRef = await adminFirestore.collection("incomeEntries").add({
+    const entryRef = await getAdminFirestore().collection("incomeEntries").add({
       userId: uid,
       amount,
       source,

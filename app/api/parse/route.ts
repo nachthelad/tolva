@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 
-import { adminFirestore } from "@/lib/firebase-admin";
+import { getAdminFirestore } from "@/lib/firebase-admin";
 import type { CategoryValue } from "@/config/billing/categories";
 import {
   PROVIDER_HINT_KEYWORD_MAP,
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const docRef = adminFirestore.collection("documents").doc(documentId);
+    const docRef = getAdminFirestore().collection("documents").doc(documentId);
     const docSnapshot = await docRef.get();
     if (!docSnapshot.exists) {
       return NextResponse.json(
@@ -338,7 +338,7 @@ async function upsertHoaSummary(userId: string, hoaDetails: any) {
 
   const periodKey = `${periodYear}-${String(periodMonth).padStart(2, "0")}`;
   const summaryId = `${userId}_${buildingCode}_${unitCode}_${periodKey}`;
-  const summaryRef = adminFirestore.collection("hoaSummaries").doc(summaryId);
+  const summaryRef = getAdminFirestore().collection("hoaSummaries").doc(summaryId);
   const now = Timestamp.now();
   const snapshot = await summaryRef.get();
 

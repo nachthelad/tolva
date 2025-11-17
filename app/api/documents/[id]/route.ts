@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 
 import { Timestamp } from "firebase-admin/firestore"
 
-import { adminFirestore } from "@/lib/firebase-admin"
+import { getAdminFirestore } from "@/lib/firebase-admin"
 import { serializeDocumentSnapshot } from "@/lib/server/document-serializer"
 import {
   authenticateRequest,
@@ -21,7 +21,7 @@ async function resolveParams(params: RouteContext["params"]) {
 async function getAuthorizedDocument(request: NextRequest, params: RouteContext["params"]) {
   const { uid } = await authenticateRequest(request)
   const resolvedParams = await resolveParams(params)
-  const docRef = adminFirestore.collection("documents").doc(resolvedParams.id)
+  const docRef = getAdminFirestore().collection("documents").doc(resolvedParams.id)
   const docSnapshot = await docRef.get()
 
   if (!docSnapshot.exists) {

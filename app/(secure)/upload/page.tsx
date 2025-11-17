@@ -11,7 +11,7 @@ import { CATEGORY_OPTIONS } from "@/config/billing/categories"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Upload } from "lucide-react"
-import { storage } from "@/lib/firebase"
+import { FirebaseClientInitializationError } from "@/lib/firebase"
 import { FirebaseError } from "firebase/app"
 import {
   describeAllowedFileTypes,
@@ -39,7 +39,6 @@ export default function UploadPage() {
     currency: "ARS",
   })
 
-  const clientStorageAvailable = Boolean(storage)
   const uploadRequirementsCopy = `${describeAllowedFileTypes()} up to ${formatMaxUploadSize()}.`
 
   const validateFile = useCallback((selectedFile?: File) => {
@@ -141,18 +140,21 @@ export default function UploadPage() {
         return data.documentId as string
       }
 
-      if (clientStorageAvailable) {
-        try {
-          storageUrl = await uploadBillFile(user.uid, file)
-        } catch (uploadError) {
-          if (uploadError instanceof FirebaseError && uploadError.code === "storage/unauthorized") {
-            console.warn("Client storage upload unauthorized, falling back to server-side upload.")
-            storageUrl = await uploadViaApi()
-          } else {
-            throw uploadError
-          }
+      try {
+        storageUrl = await uploadBillFile(user.uid, file)
+      } catch (uploadError) {
+        const shouldFallback =
+          uploadError instanceof FirebaseClientInitializationError ||
+          (uploadError instanceof FirebaseError && uploadError.code === "storage/unauthorized")
+
+        if (!shouldFallback) {
+          throw uploadError
         }
-      } else {
+
+        console.warn(
+          "Client storage upload unavailable, falling back to server-side upload.",
+          uploadError,
+        )
         storageUrl = await uploadViaApi()
       }
 

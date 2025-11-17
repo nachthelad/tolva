@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 
-import { adminFirestore } from "@/lib/firebase-admin"
+import { getAdminFirestore } from "@/lib/firebase-admin"
 import {
   authenticateRequest,
   handleAuthError,
@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     const buildingCode = searchParams.get("buildingCode")
     const unitCode = searchParams.get("unitCode")
 
-    let queryRef = adminFirestore.collection("hoaSummaries").where("userId", "==", uid)
+    let queryRef = getAdminFirestore().collection("hoaSummaries").where("userId", "==", uid)
 
     if (buildingCode) {
       queryRef = queryRef.where("buildingCode", "==", buildingCode)
