@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import Link from "next/link"
 import { FileText, PenSquare } from "lucide-react"
+import { createApiClient } from "@/lib/api-client"
 
 export default function DocumentsPage() {
   const { user } = useAuth()
@@ -14,39 +15,35 @@ export default function DocumentsPage() {
   const [loading, setLoading] = useState(true)
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!user) return
-
-    const fetchDocuments = async () => {
-      try {
-        const token = await user.getIdToken()
-        const response = await fetch("/api/documents", {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        })
-
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}))
-          throw new Error(data.error ?? "Failed to load documents")
-        }
-
-        const data = await response.json()
-        const docs = (data.documents as BillDocument[]).map((doc) => ({
-          ...doc,
-          uploadedAt: doc.uploadedAt ? new Date(doc.uploadedAt) : new Date(),
-        }))
-
-        setDocuments(docs)
-      } catch (error) {
-        console.error("Error fetching documents:", error)
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    fetchDocuments()
+  const apiClient = useMemo(() => {
+    if (!user) return null
+    return createApiClient({ getToken: () => user.getIdToken() })
   }, [user])
+
+  useEffect(() => {
+    if (!user || !apiClient) return
+    let cancelled = false
+    setLoading(true)
+    apiClient
+      .listDocuments()
+      .then((docs) => {
+        if (!cancelled) {
+          setDocuments(docs)
+        }
+      })
+      .catch((error) => {
+        console.error("Error fetching documents:", error)
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [apiClient, user])
 
   const groupedDocuments = useMemo(() => {
     const groups = new Map<string, BillDocument[]>()

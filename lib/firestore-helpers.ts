@@ -24,7 +24,7 @@ export interface BillDocument {
   id: string
   userId: string
   fileName: string
-  storageUrl: string
+  storageUrl: string | null
   pdfUrl?: string
   uploadedAt: Date
   provider?: string | null
