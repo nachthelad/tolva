@@ -2,6 +2,7 @@ import type React from "react";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
+import { AuthSessionSync } from "@/components/auth-session-sync";
 import { AuthProvider } from "@/lib/auth-context";
 import "./globals.css";
 
@@ -39,7 +40,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`font-sans antialiased`}>
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <AuthSessionSync />
+          {children}
+        </AuthProvider>
         <Analytics />
       </body>
     </html>

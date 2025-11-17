@@ -2,6 +2,12 @@
 
 `lib/server/authenticate-request.ts` centralizes the logic for reading the `Authorization` header, verifying the Firebase token, and exposing the decoded claims in a typed way. It also memoizes verification work per `NextRequest` instance via `WeakMap`, so multiple helpers in the same handler do not re-verify the token.
 
+## Protecting authenticated pages
+
+Pages that require authentication must live inside `app/(secure)/*`. The shared layout in `app/(secure)/layout.tsx` checks the Firebase token stored in the `firebase-auth-token` cookie via `lib/server/require-auth.ts` before rendering and redirects unauthenticated users to `/auth/login`. Client-side components no longer need to push to the login route because navigation is blocked at the layout level.
+
+`AuthSessionSync` keeps the cookie in sync with Firebase on the client, so adding a page to `app/(secure)` is all that is required to enforce authentication before hydration.
+
 ## Basic usage
 
 ```ts

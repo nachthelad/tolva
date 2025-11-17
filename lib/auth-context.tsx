@@ -4,6 +4,8 @@ import type React from "react"
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
 import { onAuthStateChanged, signOut as firebaseSignOut, type User } from "firebase/auth"
 
+import { clearAuthCookie } from "@/lib/client/auth-cookie"
+
 import { FirebaseClientInitializationError, getFirebaseAuth } from "./firebase"
 
 interface AuthContextType {
@@ -57,6 +59,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     try {
       await firebaseSignOut(auth)
+      clearAuthCookie()
     } catch (error) {
       console.error("Sign out error:", error)
     }

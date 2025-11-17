@@ -1,22 +1,14 @@
 "use client"
 
+import Link from "next/link"
 import type React from "react"
 
-import { useAuth } from "@/lib/auth-context"
-import { useRouter } from "next/navigation"
-import { useEffect } from "react"
+import { useProtectedRouteState } from "@/lib/hooks/use-protected-route"
 
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth()
-  const router = useRouter()
+  const { isChecking, isAuthenticated, errorMessage } = useProtectedRouteState()
 
-  useEffect(() => {
-    if (!loading && !user) {
-      router.push("/auth/login")
-    }
-  }, [user, loading, router])
-
-  if (loading) {
+  if (isChecking) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
@@ -27,8 +19,20 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     )
   }
 
-  if (!user) {
-    return null
+  if (!isAuthenticated) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center space-y-4">
+          <p className="text-muted-foreground">{errorMessage ?? "You have been signed out."}</p>
+          <Link
+            href="/auth/login"
+            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90"
+          >
+            Return to sign in
+          </Link>
+        </div>
+      </div>
+    )
   }
 
   return <>{children}</>

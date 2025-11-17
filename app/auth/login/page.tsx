@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
+import { persistAuthCookie } from "@/lib/client/auth-cookie";
 import { FirebaseClientInitializationError, getFirebaseAuth } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -37,7 +38,9 @@ export default function LoginPage() {
       provider.setCustomParameters({
         prompt: "select_account",
       });
-      await signInWithPopup(auth, provider);
+      const credential = await signInWithPopup(auth, provider);
+      const tokenResult = await credential.user.getIdTokenResult();
+      persistAuthCookie(tokenResult.token, tokenResult.expirationTime);
       router.push("/dashboard");
     } catch (error) {
       console.error("Login error:", error);
