@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { ChevronLeft, Trash2 } from "lucide-react";
 import { CATEGORY_OPTIONS } from "@/config/billing/categories";
+import { AmountVisibilityToggle, useAmountVisibility } from "@/components/amount-visibility";
 
 export default function DocumentDetailPage() {
   const { user } = useAuth();
@@ -24,6 +25,7 @@ export default function DocumentDetailPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [formData, setFormData] = useState<Partial<BillDocument>>({});
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const { showAmounts } = useAmountVisibility();
 
   const mapResponseToDocument = (data: any): BillDocument => ({
     ...data,
@@ -238,7 +240,8 @@ export default function DocumentDetailPage() {
   );
 
   const formatCurrency = (value?: number | null) => {
-    if (value === undefined || value === null) return "—";
+    if (value === undefined || value === null) return "-";
+    if (!showAmounts) return "****";
     return new Intl.NumberFormat("es-AR", {
       style: "currency",
       currency: document.currency ?? "ARS",
@@ -259,11 +262,12 @@ export default function DocumentDetailPage() {
 
       <Card className="mb-6 bg-slate-900/70 border border-slate-800/80 text-slate-100">
         <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-          <div>
-            <CardTitle>{document.fileName}</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Status: {document.status}
-            </p>
+          <div className="flex items-center gap-2">
+            <div>
+              <CardTitle>{document.fileName}</CardTitle>
+              <p className="text-sm text-muted-foreground">Status: {document.status}</p>
+            </div>
+            <AmountVisibilityToggle className="inline-flex h-8 w-8 items-center justify-center text-slate-300 hover:text-white" />
           </div>
           {shouldShowParseButton && (
             <Button

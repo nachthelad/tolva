@@ -191,10 +191,12 @@ export default function UploadPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 lg:p-10">
-      <div className="max-w-4xl">
+      <div className="max-w-4xl flex flex-col gap-2">
         <p className="text-sm uppercase tracking-wide text-slate-500">Uploader</p>
         <h1 className="text-3xl font-bold">Upload Bill</h1>
-        <p className="text-slate-400 mt-2">Upload a bill or enter the details manually to track it in your dashboard.</p>
+        <p className="text-slate-400">
+          Upload a bill or enter the details manually to track it in your dashboard.
+        </p>
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-2">

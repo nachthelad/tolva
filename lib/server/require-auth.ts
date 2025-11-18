@@ -7,7 +7,8 @@ import { getAdminAuth } from "@/lib/firebase-admin"
 import { AUTH_COOKIE_NAME } from "@/lib/constants/auth"
 
 export async function verifyAuthFromCookies(): Promise<DecodedIdToken | null> {
-  const token = cookies().get(AUTH_COOKIE_NAME)?.value
+  const cookieStore = await cookies()
+  const token = cookieStore.get(AUTH_COOKIE_NAME)?.value
   if (!token) {
     return null
   }

@@ -8,12 +8,14 @@ import { Card, CardContent } from "@/components/ui/card"
 import Link from "next/link"
 import { FileText, PenSquare } from "lucide-react"
 import { createApiClient } from "@/lib/api-client"
+import { AmountVisibilityToggle, useAmountVisibility } from "@/components/amount-visibility"
 
 export default function DocumentsPage() {
   const { user } = useAuth()
   const [documents, setDocuments] = useState<BillDocument[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
+  const { showAmounts } = useAmountVisibility()
 
   const apiClient = useMemo(() => {
     if (!user) return null
@@ -103,10 +105,15 @@ export default function DocumentsPage() {
 
   return (
     <div className="p-6 lg:p-8 bg-slate-950 text-slate-100 min-h-screen space-y-8">
-      <div>
-        <p className="text-sm uppercase tracking-wide text-slate-500">Library</p>
-        <h1 className="text-3xl font-bold">Documents</h1>
-        <p className="text-slate-400 mt-2">View and manage your uploaded bills.</p>
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <div>
+            <p className="text-sm uppercase tracking-wide text-slate-500">Library</p>
+            <h1 className="text-3xl font-bold">Documents</h1>
+          </div>
+          <AmountVisibilityToggle className="inline-flex h-8 w-8 items-center justify-center text-slate-300 hover:text-white" />
+        </div>
+        <p className="text-slate-400">View and manage your uploaded bills.</p>
       </div>
 
       {documents.length > 0 && (
@@ -134,7 +141,7 @@ export default function DocumentsPage() {
               <CardContent className="pt-6">
                 <p className="text-sm text-slate-500">Parsed amount</p>
                 <p className="text-3xl font-semibold mt-2">
-                  {parsedAmount > 0 ? `ARS ${parsedAmount.toLocaleString("es-AR")}` : "—"}
+                  {parsedAmount > 0 ? (showAmounts ? `ARS ${parsedAmount.toLocaleString("es-AR")}` : "****") : "-"}
                 </p>
               </CardContent>
             </Card>
@@ -208,7 +215,7 @@ export default function DocumentsPage() {
                           </div>
                           <div className="flex-1 min-w-0 flex items-center gap-2">
                             <p className="text-sm font-medium text-slate-100 truncate">
-                              {doc.providerNameDetected ?? doc.provider ?? doc.fileName ?? "—"}
+                              {doc.providerNameDetected ?? doc.provider ?? doc.fileName ?? "-"}
                             </p>
                             <span className="text-xs text-slate-500 whitespace-nowrap">
                               {doc.uploadedAt.toLocaleDateString()}
@@ -216,8 +223,10 @@ export default function DocumentsPage() {
                           </div>
                           <p className="text-sm font-semibold text-slate-50 whitespace-nowrap">
                             {doc.amount ?? doc.totalAmount
-                              ? `ARS ${(doc.amount ?? doc.totalAmount)?.toLocaleString("es-AR")}`
-                              : "—"}
+                              ? showAmounts
+                                ? `ARS ${(doc.amount ?? doc.totalAmount)?.toLocaleString("es-AR")}`
+                                : "****"
+                              : "-"}
                           </p>
                         </div>
 

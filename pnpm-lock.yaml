@@ -2410,6 +2410,7 @@ packages:
     resolution: {integrity: sha512-WkezNsLK8sGpuFC7+PPP0DsXROwdoOxmXPBTtUWWkCwCi/Vi97MRC52Ly6FWIJjOKIywpm/L2oaUgSrmtU+7ZQ==}
     engines: {node: '>=20.18.0'}
     hasBin: true
+    bundledDependencies: []
 
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}

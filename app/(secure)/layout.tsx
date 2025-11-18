@@ -3,6 +3,7 @@ import { redirect } from "next/navigation"
 
 import { ProtectedRoute } from "@/components/protected-route"
 import { Sidebar } from "@/components/sidebar"
+import { AmountVisibilityProvider } from "@/components/amount-visibility"
 import { verifyAuthFromCookies } from "@/lib/server/require-auth"
 
 export default async function ProtectedLayout({
@@ -16,11 +17,13 @@ export default async function ProtectedLayout({
   }
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      <Sidebar />
-      <main className="flex-1 min-h-screen bg-background">
-        <ProtectedRoute>{children}</ProtectedRoute>
-      </main>
-    </div>
+    <AmountVisibilityProvider>
+      <div className="flex min-h-screen bg-background text-foreground">
+        <Sidebar />
+        <main className="flex-1 min-h-screen bg-background">
+          <ProtectedRoute>{children}</ProtectedRoute>
+        </main>
+      </div>
+    </AmountVisibilityProvider>
   )
 }
