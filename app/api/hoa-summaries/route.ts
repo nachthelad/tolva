@@ -1,22 +1,27 @@
 import { NextRequest, NextResponse } from "next/server"
 
-import { adminAuth, adminFirestore } from "@/lib/firebase-admin"
+import { getAdminFirestore } from "@/lib/firebase-admin"
+import {
+  authenticateRequest,
+  handleAuthError,
+} from "@/lib/server/authenticate-request"
+import { createRequestLogger } from "@/lib/server/logger"
+import { serializeSnapshot, toIsoDateTime } from "@/lib/server/document-serializer"
 
 export async function GET(request: NextRequest) {
+  const baseLogger = createRequestLogger({
+    request,
+    context: { route: "GET /api/hoa-summaries" },
+  })
+  let log = baseLogger
   try {
-    const authHeader = request.headers.get("authorization") ?? ""
-    if (!authHeader.startsWith("Bearer ")) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-
-    const token = authHeader.slice(7)
-    const decoded = await adminAuth.verifyIdToken(token)
-
+    const { uid } = await authenticateRequest(request)
+    log = log.withContext({ userId: uid })
     const { searchParams } = request.nextUrl
     const buildingCode = searchParams.get("buildingCode")
     const unitCode = searchParams.get("unitCode")
 
-    let queryRef = adminFirestore.collection("hoaSummaries").where("userId", "==", decoded.uid)
+    let queryRef = getAdminFirestore().collection("hoaSummaries").where("userId", "==", uid)
 
     if (buildingCode) {
       queryRef = queryRef.where("buildingCode", "==", buildingCode)
@@ -26,20 +31,6 @@ export async function GET(request: NextRequest) {
     }
 
     const snapshot = await queryRef.get()
-
-    const toIsoString = (value: unknown): string | null => {
-      if (!value) return null
-      if (value instanceof Date) return value.toISOString()
-      if (typeof value === "string") return value
-      if (typeof value === "object" && value !== null && "toDate" in value) {
-        try {
-          return (value as { toDate: () => Date }).toDate().toISOString()
-        } catch {
-          return null
-        }
-      }
-      return null
-    }
 
     type HoaSummaryResponse = Record<string, unknown> & {
       id: string
@@ -51,14 +42,14 @@ export async function GET(request: NextRequest) {
     const summaries: HoaSummaryResponse[] = snapshot.docs
       .map((doc) => {
         const data = doc.data() as Record<string, unknown>
+        const base = serializeSnapshot(doc)
         const periodKey = typeof data.periodKey === "string" ? data.periodKey : null
 
         return {
-          id: doc.id,
-          ...data,
+          ...base,
           periodKey,
-          createdAt: toIsoString(data.createdAt),
-          updatedAt: toIsoString(data.updatedAt),
+          createdAt: toIsoDateTime(data.createdAt),
+          updatedAt: toIsoDateTime(data.updatedAt),
         }
       })
       .sort((a, b) => {
@@ -70,7 +61,11 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ summaries })
   } catch (error) {
-    console.error("hoaSummaries GET error:", error)
+    const authResponse = handleAuthError(error)
+    if (authResponse) {
+      return authResponse
+    }
+    log.error("hoaSummaries GET error", { error })
     return NextResponse.json({ error: "Failed to load HOA summaries" }, { status: 500 })
   }
 }

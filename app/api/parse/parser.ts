@@ -1,4 +1,6 @@
 import type { HoaDetails, HoaRubro } from "@/types/hoa";
+import { logger as baseLogger, type Logger } from "@/lib/server/logger";
+import { z } from "zod";
 
 export type BillingParseResult = {
   text: string | null;
@@ -13,6 +15,44 @@ export type BillingParseResult = {
   periodEnd: string | null;
   hoaDetails: HoaDetails | null;
 };
+
+const hoaRubroSchema = z.object({
+  rubroNumber: z.number().nullable(),
+  label: z.string().nullable(),
+  total: z.number().nullable(),
+});
+
+const hoaDetailsSchema = z
+  .object({
+    buildingCode: z.string().nullable(),
+    buildingAddress: z.string().nullable(),
+    unitCode: z.string().nullable(),
+    unitLabel: z.string().nullable(),
+    ownerName: z.string().nullable(),
+    periodLabel: z.string().nullable(),
+    periodYear: z.number().nullable(),
+    periodMonth: z.number().nullable(),
+    firstDueAmount: z.number().nullable(),
+    secondDueAmount: z.number().nullable(),
+    totalBuildingExpenses: z.number().nullable(),
+    totalToPayUnit: z.number().nullable(),
+    rubros: z.array(hoaRubroSchema).nullable(),
+  })
+  .nullable();
+
+const BillingParseResultSchema = z.object({
+  text: z.string().nullable(),
+  providerId: z.string().nullable(),
+  providerNameDetected: z.string().nullable(),
+  category: z.string().nullable(),
+  totalAmount: z.number().nullable(),
+  currency: z.string().nullable(),
+  issueDate: z.string().nullable(),
+  dueDate: z.string().nullable(),
+  periodStart: z.string().nullable(),
+  periodEnd: z.string().nullable(),
+  hoaDetails: hoaDetailsSchema,
+});
 
 type JsonSchema = {
   type: "json_schema";
@@ -467,72 +507,172 @@ async function extractTextWithPdf2Json(pdfBuffer: Buffer): Promise<string> {
   });
 }
 
-async function extractPdfText(pdfBuffer: Buffer): Promise<string> {
+export async function extractPdfText(
+  pdfBuffer: Buffer,
+  log: Logger
+): Promise<string> {
   try {
     const text = await extractTextWithPdf2Json(pdfBuffer);
     if (text.trim().length > 0) {
       return text;
     }
-    console.warn("pdf2json extracted empty text, falling back to pdf-parse");
+    log.warn("pdf2json extracted empty text, falling back to pdf-parse");
   } catch (error) {
-    console.warn("pdf2json text extraction failed, falling back to pdf-parse:", error);
+    log.warn("pdf2json text extraction failed, falling back to pdf-parse", {
+      error,
+    });
   }
   const pdfParse = await loadPdfParse();
   const pdfData = await pdfParse(pdfBuffer);
   return typeof pdfData?.text === "string" ? pdfData.text : "";
 }
 
-export async function parsePdfWithOpenAI(
-  pdfBuffer: Buffer
-): Promise<BillingParseResult> {
-  const parseTimerLabel = `parsePdfWithOpenAI-${Date.now()}`;
-  console.time(parseTimerLabel);
-  try {
-    const fullText = await extractPdfText(pdfBuffer);
-    const relevantText = extractRelevantText(fullText);
+type RetryOptions = {
+  maxAttempts?: number;
+  baseDelayMs?: number;
+};
 
-    const client = getOpenAIClient();
-    const openAiTimerLabel = `openai.responses.create-${Date.now()}`;
-    console.time(openAiTimerLabel);
-    const response = await client.responses
-      .create({
-        model: "gpt-5-mini",
-        input: [
-          {
-            role: "system",
-            content: [
-              {
-                type: "input_text",
-                text: OPENAI_SYSTEM_PROMPT,
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: `${OPENAI_USER_PROMPT}\n\n${relevantText}`,
-              },
-            ],
-          },
-        ],
-        text: {
-          format: BILL_PARSER_SCHEMA,
-        },
-      })
-      .finally(() => {
-        console.timeEnd(openAiTimerLabel);
+const wait = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+async function callOpenAIWithRetry(
+  requestFactory: () => Promise<OpenAIResponse>,
+  log: Logger,
+  options: RetryOptions = {}
+): Promise<{ response: OpenAIResponse; attempts: number }> {
+  const maxAttempts = options.maxAttempts ?? 3;
+  const baseDelayMs = options.baseDelayMs ?? 500;
+  let attempt = 0;
+  let lastError: unknown;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    const attemptStart = Date.now();
+    try {
+      const response = await requestFactory();
+      return { response, attempts: attempt };
+    } catch (error) {
+      lastError = error;
+      const durationMs = Date.now() - attemptStart;
+      if (attempt >= maxAttempts) {
+        log.error("OpenAI request failed after retries", {
+          attempts: attempt,
+          durationMs,
+          error,
+        });
+        throw error;
+      }
+      const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
+      log.warn("OpenAI request attempt failed", {
+        attempt,
+        durationMs,
+        delayMs,
+        error,
       });
+      await wait(delayMs);
+    }
+  }
 
-    const jsonText = extractJsonFromResponse(response);
-    const parsed = JSON.parse(jsonText);
-    const sanitized = sanitizeBillingResult(parsed);
+  throw lastError ?? new Error("OpenAI request failed");
+}
+
+export async function parseBillingTextWithOpenAI(
+  fullText: string,
+  scopedLogger: Logger = baseLogger
+): Promise<BillingParseResult> {
+  const log = scopedLogger;
+  const trimmedText = fullText?.trim();
+  if (!trimmedText) {
+    throw new Error("Cannot parse empty text extract");
+  }
+
+  const parseStart = Date.now();
+  try {
+    const relevantText = extractRelevantText(fullText);
+    const client = getOpenAIClient();
+    const openAiStart = Date.now();
+
+    const { response, attempts } = await callOpenAIWithRetry(
+      () =>
+        client.responses.create({
+          model: "gpt-5-mini",
+          input: [
+            {
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: OPENAI_SYSTEM_PROMPT,
+                },
+              ],
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: `${OPENAI_USER_PROMPT}\n\n${relevantText}`,
+                },
+              ],
+            },
+          ],
+          text: {
+            format: BILL_PARSER_SCHEMA,
+          },
+        }),
+      log
+    );
+
+    const openAiDuration = Date.now() - openAiStart;
+    log.debug("OpenAI responses.create completed", {
+      durationMs: Number(openAiDuration.toFixed(2)),
+      attempts,
+    });
+
+    let parsedPayload: unknown;
+    try {
+      const jsonText = extractJsonFromResponse(response);
+      parsedPayload = JSON.parse(jsonText);
+    } catch (error) {
+      log.error("Failed to parse OpenAI response payload", { error });
+      throw new Error("Failed to parse OpenAI response");
+    }
+
+    let validated: z.infer<typeof BillingParseResultSchema>;
+    try {
+      validated = BillingParseResultSchema.parse(parsedPayload);
+    } catch (error) {
+      log.error("OpenAI response validation failed", { error });
+      throw error;
+    }
+    const sanitized = sanitizeBillingResult(validated);
     return {
       ...sanitized,
       text: sanitized.text ?? (fullText.length > 0 ? fullText : null),
     };
   } finally {
-    console.timeEnd(parseTimerLabel);
+    const durationMs = Date.now() - parseStart;
+    log.debug("parseBillingTextWithOpenAI completed", {
+      durationMs: Number(durationMs.toFixed(2)),
+    });
+  }
+}
+
+export async function parsePdfWithOpenAI(
+  pdfBuffer: Buffer,
+  scopedLogger: Logger = baseLogger
+): Promise<BillingParseResult> {
+  const log = scopedLogger;
+  const parseStart = Date.now();
+  try {
+    const fullText = await extractPdfText(pdfBuffer, log);
+    return await parseBillingTextWithOpenAI(fullText, log);
+  } finally {
+    const durationMs = Date.now() - parseStart;
+    log.debug("parsePdfWithOpenAI completed", {
+      durationMs: Number(durationMs.toFixed(2)),
+    });
   }
 }

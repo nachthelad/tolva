@@ -1,23 +1,42 @@
 import { type NextRequest, NextResponse } from "next/server";
 
-import { adminAuth, adminFirestore } from "@/lib/firebase-admin";
+import { getAdminFirestore } from "@/lib/firebase-admin";
 import type { CategoryValue } from "@/config/billing/categories";
-import { PROVIDER_HINTS, type ProviderHint } from "@/config/billing/providerHints";
+import {
+  PROVIDER_HINT_KEYWORD_MAP,
+  type ProviderHint,
+} from "@/config/billing/providerHints";
 import { normalizeCategory, normalizeSearchValue } from "@/lib/category-utils";
+import {
+  authenticateRequest,
+  handleAuthError,
+} from "@/lib/server/authenticate-request";
+import {
+  calculateHoaTotals,
+  isNormalizedHoaDetails,
+  normalizeHoaDetails,
+  normalizeHoaSummaryPayload,
+} from "@/lib/server/hoa";
+import { createRequestLogger } from "@/lib/server/logger";
+import type { Logger } from "@/lib/server/logger";
 
-import { parsePdfWithOpenAI, type BillingParseResult } from "./parser";
-import { Timestamp } from "firebase-admin/firestore";
+import {
+  extractPdfText,
+  parseBillingTextWithOpenAI,
+  type BillingParseResult,
+} from "./parser";
+import { Timestamp, type DocumentReference } from "firebase-admin/firestore";
+import { performance } from "node:perf_hooks";
 
 export async function POST(request: NextRequest) {
+  const baseLogger = createRequestLogger({
+    request,
+    context: { route: "POST /api/parse" },
+  });
+  let log = baseLogger;
   try {
-    const authHeader = request.headers.get("authorization") ?? "";
-    if (!authHeader.startsWith("Bearer ")) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const token = authHeader.slice(7);
-    const decoded = await adminAuth.verifyIdToken(token);
-
+    const { uid } = await authenticateRequest(request);
+    log = log.withContext({ userId: uid });
     const { documentId } = await request.json();
 
     if (!documentId) {
@@ -27,7 +46,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const docRef = adminFirestore.collection("documents").doc(documentId);
+    const docRef = getAdminFirestore().collection("documents").doc(documentId);
     const docSnapshot = await docRef.get();
     if (!docSnapshot.exists) {
       return NextResponse.json(
@@ -37,7 +56,7 @@ export async function POST(request: NextRequest) {
     }
 
     const documentData = docSnapshot.data();
-    if (documentData?.userId && documentData.userId !== decoded.uid) {
+    if (documentData?.userId && documentData.userId !== uid) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     const pdfUrl = documentData?.pdfUrl ?? documentData?.storageUrl;
@@ -49,44 +68,144 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let pdfBuffer: Buffer;
-    try {
-      const pdfResponse = await fetch(pdfUrl);
-      if (!pdfResponse.ok) {
-        const errorBody = await pdfResponse.text();
-        throw new Error(
-          `Failed to download PDF: ${pdfResponse.status} ${errorBody}`
+    const cachedText = getNonEmptyString(documentData?.textExtract);
+    let fullText: string | null = cachedText;
+
+    if (cachedText) {
+      log.debug("PDF download skipped", {
+        durationMs: 0,
+        reason: "cached_text",
+      });
+    }
+
+    if (!fullText) {
+      let pdfBuffer: Buffer;
+      const downloadStart = performance.now();
+      try {
+        const pdfResponse = await fetch(pdfUrl);
+        if (!pdfResponse.ok) {
+          const errorBody = await pdfResponse.text();
+          throw new Error(
+            `Failed to download PDF: ${pdfResponse.status} ${errorBody}`
+          );
+        }
+        const arrayBuffer = await pdfResponse.arrayBuffer();
+        pdfBuffer = Buffer.from(arrayBuffer);
+      } catch (error: any) {
+        const downloadDuration = performance.now() - downloadStart;
+        log.error("PDF download error", {
+          error,
+          documentId,
+          pdfUrl,
+          durationMs: Number(downloadDuration.toFixed(2)),
+        });
+        await updateDocumentWithMetrics(
+          docRef,
+          {
+            status: "needs_review",
+            errorMessage: error.message ?? "Failed to download PDF",
+            updatedAt: new Date(),
+          },
+          log,
+          "pdf_download_error"
+        );
+        return NextResponse.json(
+          { error: "Failed to download PDF" },
+          { status: 502 }
         );
       }
-      const arrayBuffer = await pdfResponse.arrayBuffer();
-      pdfBuffer = Buffer.from(arrayBuffer);
-    } catch (error: any) {
-      console.error("PDF download error:", error);
-      await docRef.update({
-        status: "needs_review",
-        errorMessage: error.message ?? "Failed to download PDF",
-        updatedAt: new Date(),
+      const downloadDuration = performance.now() - downloadStart;
+      log.debug("PDF download completed", {
+        durationMs: Number(downloadDuration.toFixed(2)),
       });
+
+      const textExtractionStart = performance.now();
+      try {
+        fullText = await extractPdfText(pdfBuffer, log);
+      } catch (error: any) {
+        const extractionDuration = performance.now() - textExtractionStart;
+        log.error("Text extraction error", {
+          error,
+          documentId,
+          durationMs: Number(extractionDuration.toFixed(2)),
+        });
+        await updateDocumentWithMetrics(
+          docRef,
+          {
+            status: "needs_review",
+            errorMessage: error.message ?? "Failed to extract PDF text",
+            updatedAt: new Date(),
+          },
+          log,
+          "text_extraction_error"
+        );
+        return NextResponse.json(
+          { error: "Failed to extract PDF text" },
+          { status: 502 }
+        );
+      }
+      const extractionDuration = performance.now() - textExtractionStart;
+      log.debug("Text extraction completed", {
+        durationMs: Number(extractionDuration.toFixed(2)),
+        source: "pdf",
+      });
+    } else {
+      log.debug("Text extraction completed", {
+        durationMs: 0,
+        source: "cache",
+      });
+    }
+
+    if (!fullText || !fullText.trim()) {
+      const errorMessage = "Extracted text was empty";
+      await updateDocumentWithMetrics(
+        docRef,
+        {
+          status: "needs_review",
+          errorMessage,
+          textExtract: fullText ?? null,
+          updatedAt: new Date(),
+        },
+        log,
+        "empty_text_extract"
+      );
       return NextResponse.json(
-        { error: "Failed to download PDF" },
+        { error: errorMessage },
         { status: 502 }
       );
     }
 
     let parseResponse: BillingParseResult;
+    const parserStart = performance.now();
     try {
-      parseResponse = await parsePdfWithOpenAI(pdfBuffer);
+      parseResponse = await parseBillingTextWithOpenAI(fullText, log);
     } catch (error: any) {
-      console.error("PDF parsing error:", error);
-      await docRef.update({
-        status: "needs_review",
-        errorMessage: error.message ?? "Failed to parse PDF",
-        updatedAt: new Date(),
+      const parserDuration = performance.now() - parserStart;
+      log.error("PDF parsing error", {
+        error,
+        documentId,
+        durationMs: Number(parserDuration.toFixed(2)),
       });
+      await updateDocumentWithMetrics(
+        docRef,
+        {
+          status: "needs_review",
+          errorMessage: error.message ?? "Failed to parse PDF",
+          textExtract: fullText,
+          updatedAt: new Date(),
+        },
+        log,
+        "parse_error_update"
+      );
       return NextResponse.json(
         { error: "Failed to parse PDF" },
         { status: 502 }
       );
+    } finally {
+      const parserDuration = performance.now() - parserStart;
+      log.debug("OpenAI parser latency captured", {
+        durationMs: Number(parserDuration.toFixed(2)),
+      });
     }
 
     const detectedCategory = normalizeCategory(
@@ -98,8 +217,14 @@ export async function POST(request: NextRequest) {
         null
     );
 
+    const normalizedHoaDetails = normalizeHoaDetails(parseResponse.hoaDetails);
+
     const updatePayload: Record<string, any> = {
-      textExtract: parseResponse.text ?? documentData?.textExtract ?? null,
+      textExtract:
+        fullText ??
+        parseResponse.text ??
+        documentData?.textExtract ??
+        null,
       providerId: parseResponse.providerId ?? documentData?.providerId ?? null,
       providerNameDetected:
         parseResponse.providerNameDetected ??
@@ -121,13 +246,15 @@ export async function POST(request: NextRequest) {
       errorMessage: null,
     };
 
-    if ("hoaDetails" in parseResponse) {
+    if (normalizedHoaDetails) {
+      updatePayload.hoaDetails = normalizedHoaDetails;
+    } else if ("hoaDetails" in parseResponse) {
       updatePayload.hoaDetails = parseResponse.hoaDetails ?? null;
     }
 
-    if (parseResponse.hoaDetails?.totalToPayUnit != null) {
-      updatePayload.totalAmount = parseResponse.hoaDetails.totalToPayUnit;
-      updatePayload.amount = parseResponse.hoaDetails.totalToPayUnit;
+    if (normalizedHoaDetails?.totalToPayUnit != null) {
+      updatePayload.totalAmount = normalizedHoaDetails.totalToPayUnit;
+      updatePayload.amount = normalizedHoaDetails.totalToPayUnit;
       updatePayload.currency = parseResponse.currency ?? "ARS";
       updatePayload.category = "hoa";
       if (!updatePayload.providerId) {
@@ -139,13 +266,22 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const fallbackProvider = inferProviderFromContent({
-      fileName: documentData?.fileName,
-      text:
-        updatePayload.textExtract ??
-        documentData?.textExtract ??
-        parseResponse.text ??
-        "",
+    const providerInferenceCache = new Map<string, ProviderHint | null>();
+    const inferenceStart = performance.now();
+    const fallbackProvider = inferProviderFromContent(
+      {
+        fileName: documentData?.fileName,
+        text:
+          updatePayload.textExtract ??
+          documentData?.textExtract ??
+          parseResponse.text ??
+          "",
+      },
+      providerInferenceCache
+    );
+    const inferenceDuration = performance.now() - inferenceStart;
+    log.debug("Provider inference latency captured", {
+      durationMs: Number(inferenceDuration.toFixed(2)),
     });
 
     if (fallbackProvider) {
@@ -168,17 +304,26 @@ export async function POST(request: NextRequest) {
     assignDate("periodStart", parseResponse.periodStart);
     assignDate("periodEnd", parseResponse.periodEnd);
 
-    await docRef.update(updatePayload);
+    await updateDocumentWithMetrics(
+      docRef,
+      updatePayload,
+      log,
+      "parse_success_update"
+    );
 
-    if (parseResponse.hoaDetails && documentData?.userId) {
-      await upsertHoaSummary(documentData.userId, parseResponse.hoaDetails);
+    if (normalizedHoaDetails && documentData?.userId) {
+      await upsertHoaSummary(documentData.userId, normalizedHoaDetails);
     }
 
     const updatedDoc = await docRef.get();
 
     return NextResponse.json({ id: updatedDoc.id, ...updatedDoc.data() });
   } catch (error) {
-    console.error("Parse route error:", error);
+    const authResponse = handleAuthError(error);
+    if (authResponse) {
+      return authResponse;
+    }
+    log.error("Parse route error", { error });
     return NextResponse.json(
       { error: "Failed to parse document" },
       { status: 500 }
@@ -195,55 +340,37 @@ function parseDate(value: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-async function upsertHoaSummary(userId: string, hoaDetails: any) {
-  const { buildingCode, unitCode, periodYear, periodMonth } = hoaDetails ?? {};
+async function upsertHoaSummary(
+  userId: string,
+  hoaDetails: unknown
+) {
+  const normalizedHoaDetails = isNormalizedHoaDetails(hoaDetails)
+    ? hoaDetails
+    : normalizeHoaDetails(hoaDetails);
+  const { buildingCode, unitCode, periodYear, periodMonth } =
+    normalizedHoaDetails ?? {};
   if (!userId || !buildingCode || !unitCode || !periodYear || !periodMonth) {
     return;
   }
 
-  const periodKey = `${periodYear}-${String(periodMonth).padStart(2, "0")}`;
+  const periodKey =
+    normalizedHoaDetails?.periodKey ??
+    `${periodYear}-${String(periodMonth).padStart(2, "0")}`;
   const summaryId = `${userId}_${buildingCode}_${unitCode}_${periodKey}`;
-  const summaryRef = adminFirestore.collection("hoaSummaries").doc(summaryId);
+  const summaryRef = getAdminFirestore().collection("hoaSummaries").doc(summaryId);
   const now = Timestamp.now();
   const snapshot = await summaryRef.get();
 
+  const totals = calculateHoaTotals(normalizedHoaDetails?.rubros);
+
   const basePayload = {
-    userId,
-    buildingCode,
-    buildingAddress: hoaDetails.buildingAddress ?? null,
-    unitCode,
-    unitLabel: hoaDetails.unitLabel ?? null,
-    ownerName: hoaDetails.ownerName ?? null,
-    periodKey,
-    periodYear,
-    periodMonth,
-    periodLabel:
-      hoaDetails.periodLabel ??
-      `${String(periodMonth).padStart(2, "0")}/${periodYear}`,
-    totalToPayUnit: hoaDetails.totalToPayUnit ?? null,
-    totalBuildingExpenses: hoaDetails.totalBuildingExpenses ?? null,
-    rubros: Array.isArray(hoaDetails.rubros)
-      ? hoaDetails.rubros.map((r: any) => {
-          const hasConvertibleTotal =
-            r?.total !== null && r?.total !== undefined;
-          const numericTotal = hasConvertibleTotal
-            ? Number(r.total)
-            : Number.NaN;
-          const totalValue =
-            typeof r?.total === "number"
-              ? r.total
-              : hasConvertibleTotal && Number.isFinite(numericTotal)
-              ? numericTotal
-              : null;
-          return {
-            rubroNumber:
-              typeof r?.rubroNumber === "number" ? r.rubroNumber : null,
-            label: typeof r?.label === "string" ? r.label : null,
-            total: totalValue,
-          };
-        })
-      : [],
-    updatedAt: now,
+    ...normalizeHoaSummaryPayload({
+      userId,
+      hoaDetails: normalizedHoaDetails,
+      now,
+    }),
+    rubrosTotal: totals.rubrosTotal,
+    rubrosWithTotals: totals.rubrosWithTotals,
   };
 
   if (snapshot.exists) {
@@ -263,23 +390,75 @@ async function upsertHoaSummary(userId: string, hoaDetails: any) {
   });
 }
 
-function inferProviderFromContent({
-  fileName,
-  text,
-}: {
-  fileName?: string | null;
-  text?: string | null;
-}): ProviderHint | null {
-  const values = [fileName, text]
-    .filter(Boolean)
-    .map((value) => normalizeSearchValue(value as string));
-  if (!values.length) return null;
+type ProviderInferenceCache = Map<string, ProviderHint | null>;
 
-  for (const hint of PROVIDER_HINTS) {
+function getNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  return value.trim().length > 0 ? value : null;
+}
+
+async function updateDocumentWithMetrics(
+  ref: DocumentReference,
+  payload: Record<string, unknown>,
+  log: Logger,
+  context: string
+) {
+  const start = performance.now();
+  await ref.update(payload);
+  const duration = performance.now() - start;
+  log.debug("Firestore write completed", {
+    durationMs: Number(duration.toFixed(2)),
+    context,
+  });
+}
+
+function inferProviderFromContent(
+  {
+    fileName,
+    text,
+  }: {
+    fileName?: string | null;
+    text?: string | null;
+  },
+  memo?: ProviderInferenceCache
+): ProviderHint | null {
+  const cacheKey = `${fileName ?? ""}:::${text ?? ""}`;
+  if (memo?.has(cacheKey)) {
+    return memo.get(cacheKey) ?? null;
+  }
+
+  const normalizedFileName = fileName
+    ? normalizeSearchValue(fileName)
+    : null;
+  const normalizedText = text ? normalizeSearchValue(text) : null;
+
+  if (!normalizedFileName && !normalizedText) {
+    memo?.set(cacheKey, null);
+    return null;
+  }
+
+  const match = findProviderByNormalizedContent({
+    normalizedFileName,
+    normalizedText,
+  });
+
+  memo?.set(cacheKey, match);
+  return match;
+}
+
+function findProviderByNormalizedContent({
+  normalizedFileName,
+  normalizedText,
+}: {
+  normalizedFileName: string | null;
+  normalizedText: string | null;
+}): ProviderHint | null {
+  for (const [keyword, hint] of PROVIDER_HINT_KEYWORD_MAP.entries()) {
     if (
-      hint.keywords.some((keyword) =>
-        values.some((value) => value.includes(keyword))
-      )
+      (normalizedFileName && normalizedFileName.includes(keyword)) ||
+      (normalizedText && normalizedText.includes(keyword))
     ) {
       return hint;
     }

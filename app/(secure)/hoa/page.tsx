@@ -22,6 +22,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { AmountVisibilityToggle, useAmountVisibility } from "@/components/amount-visibility";
 
 type SelectionOption = {
   key: string;
@@ -44,6 +45,7 @@ export default function HoaPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedUnitKey, setSelectedUnitKey] =
     useState<string>(PRIMARY_UNIT_CODE);
+  const { showAmounts } = useAmountVisibility();
 
   useEffect(() => {
     if (!user) return;
@@ -164,18 +166,22 @@ export default function HoaPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 lg:p-10 space-y-8">
-      <div>
-        <p className="text-sm uppercase tracking-wide text-slate-500">HOA</p>
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-3xl font-bold">HOA insights</h1>
-          <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs uppercase tracking-wide text-emerald-300">
-            <LineChartIcon className="w-3.5 h-3.5" />
-            Comparison
-          </span>
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <div>
+            <p className="text-sm uppercase tracking-wide text-slate-500">HOA</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-3xl font-bold">HOA insights</h1>
+              <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs uppercase tracking-wide text-emerald-300">
+                <LineChartIcon className="w-3.5 h-3.5" />
+                Comparison
+              </span>
+            </div>
+          </div>
+          <AmountVisibilityToggle className="inline-flex h-8 w-8 items-center justify-center text-slate-300 hover:text-white" />
         </div>
-        <p className="text-slate-400 mt-2 max-w-3xl">
-          Track monthly HOA fees, spot unusual increases, and highlight new
-          charges for your unit.
+        <p className="text-slate-400 max-w-3xl">
+          Track monthly HOA fees, spot unusual increases, and highlight new charges for your unit.
         </p>
       </div>
 
@@ -244,7 +250,7 @@ export default function HoaPage() {
                           borderRadius: 8,
                         }}
                         formatter={(value: number) =>
-                          currencyFormatter.format(value ?? 0)
+                          formatCurrency(value ?? 0, showAmounts)
                         }
                       />
                       <Line
@@ -296,7 +302,7 @@ export default function HoaPage() {
                         <ArrowUpRight className="w-4 h-4 text-amber-200" />
                       )}
                       <span className="text-amber-100">
-                        {formatCurrency(alert.currentTotal)}
+                        {formatCurrency(alert.currentTotal, showAmounts)}
                       </span>
                     </div>
                   </div>
@@ -338,7 +344,7 @@ export default function HoaPage() {
                           {rubro.label ?? `Rubro ${rubro.rubroNumber}`}
                         </p>
                         <p className="text-lg font-semibold text-slate-100">
-                          {formatCurrency(rubro.total)}
+                          {formatCurrency(rubro.total, showAmounts)}
                         </p>
                       </div>
                     ))}
@@ -380,10 +386,10 @@ export default function HoaPage() {
                             </div>
                           </td>
                           <td className="py-3 pr-4 text-slate-300">
-                            {formatCurrency(diff.previousTotal)}
+                            {formatCurrency(diff.previousTotal, showAmounts)}
                           </td>
                           <td className="py-3 pr-4 text-slate-100">
-                            {formatCurrency(diff.currentTotal)}
+                            {formatCurrency(diff.currentTotal, showAmounts)}
                           </td>
                           <td
                             className={`py-3 pr-4 ${
@@ -398,7 +404,7 @@ export default function HoaPage() {
                               ? "—"
                               : `${
                                   diff.diffAmount > 0 ? "+" : "-"
-                                }${formatCurrency(Math.abs(diff.diffAmount))}`}
+                                }${formatCurrency(Math.abs(diff.diffAmount), showAmounts)}`}
                           </td>
                           <td
                             className={`py-3 pr-4 ${
@@ -434,8 +440,9 @@ export default function HoaPage() {
   );
 }
 
-function formatCurrency(value: number | null | undefined) {
-  if (value === null || value === undefined) return "—";
+function formatCurrency(value: number | null | undefined, showAmounts = true) {
+  if (value === null || value === undefined) return "-";
+  if (!showAmounts) return "****";
   return currencyFormatter.format(value);
 }
 

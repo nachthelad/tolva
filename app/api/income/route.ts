@@ -1,37 +1,49 @@
 import { NextRequest, NextResponse } from "next/server"
 
-import { adminAuth, adminFirestore } from "@/lib/firebase-admin"
+import { getAdminFirestore } from "@/lib/firebase-admin"
 import { Timestamp, type DocumentSnapshot } from "firebase-admin/firestore"
+import {
+  authenticateRequest,
+  handleAuthError,
+} from "@/lib/server/authenticate-request"
+import { createRequestLogger } from "@/lib/server/logger"
+import { serializeSnapshot, toIsoDateTime } from "@/lib/server/document-serializer"
 
 export async function GET(request: NextRequest) {
+  const baseLogger = createRequestLogger({
+    request,
+    context: { route: "GET /api/income" },
+  })
+  let log = baseLogger
   try {
-    const authHeader = request.headers.get("authorization") ?? ""
-    if (!authHeader.startsWith("Bearer ")) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-    const token = authHeader.slice(7)
-    const decoded = await adminAuth.verifyIdToken(token)
+    const { uid } = await authenticateRequest(request)
+    log = log.withContext({ userId: uid })
 
-    const snapshot = await adminFirestore.collection("incomeEntries").where("userId", "==", decoded.uid).get()
+    const snapshot = await getAdminFirestore().collection("incomeEntries").where("userId", "==", uid).get()
 
     const entries = snapshot.docs
       .map(serializeIncomeDoc)
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     return NextResponse.json({ entries })
   } catch (error) {
-    console.error("Income GET error:", error)
+    const authResponse = handleAuthError(error)
+    if (authResponse) {
+      return authResponse
+    }
+    log.error("Income GET error", { error })
     return NextResponse.json({ error: "Failed to load income entries" }, { status: 500 })
   }
 }
 
 export async function POST(request: NextRequest) {
+  const baseLogger = createRequestLogger({
+    request,
+    context: { route: "POST /api/income" },
+  })
+  let log = baseLogger
   try {
-    const authHeader = request.headers.get("authorization") ?? ""
-    if (!authHeader.startsWith("Bearer ")) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-    const token = authHeader.slice(7)
-    const decoded = await adminAuth.verifyIdToken(token)
+    const { uid } = await authenticateRequest(request)
+    log = log.withContext({ userId: uid })
 
     const body = await request.json()
     const amount = Number.parseFloat(body.amount)
@@ -42,8 +54,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid amount" }, { status: 400 })
     }
 
-    const entryRef = await adminFirestore.collection("incomeEntries").add({
-      userId: decoded.uid,
+    const entryRef = await getAdminFirestore().collection("incomeEntries").add({
+      userId: uid,
       amount,
       source,
       currency: "ARS",
@@ -55,19 +67,25 @@ export async function POST(request: NextRequest) {
     const entrySnapshot = await entryRef.get()
     return NextResponse.json(serializeIncomeDoc(entrySnapshot), { status: 201 })
   } catch (error) {
-    console.error("Income POST error:", error)
+    const authResponse = handleAuthError(error)
+    if (authResponse) {
+      return authResponse
+    }
+    log.error("Income POST error", { error })
     return NextResponse.json({ error: "Failed to add income entry" }, { status: 500 })
   }
 }
 
 function serializeIncomeDoc(doc: DocumentSnapshot) {
-  const data = doc.data() ?? {}
-  const dateValue = data.date?.toDate ? data.date.toDate() : data.date ? new Date(data.date) : null
+  const raw = (doc.data() ?? {}) as Record<string, unknown>
+  const base = serializeSnapshot(doc)
+  const fallbackDate = new Date().toISOString()
+
   return {
-    id: doc.id,
-    amount: data.amount ?? 0,
-    source: data.source ?? "Unknown",
-    date: dateValue ? dateValue.toISOString() : new Date().toISOString(),
-    currency: data.currency ?? "ARS",
+    ...base,
+    amount: typeof raw.amount === "number" ? raw.amount : 0,
+    source: typeof raw.source === "string" && raw.source.trim().length > 0 ? raw.source : "Unknown",
+    date: toIsoDateTime(raw.date, fallbackDate) ?? fallbackDate,
+    currency: typeof raw.currency === "string" && raw.currency.trim().length > 0 ? raw.currency : "ARS",
   }
 }

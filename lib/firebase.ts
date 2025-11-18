@@ -3,6 +3,8 @@ import { browserLocalPersistence, getAuth, setPersistence, type Auth } from "fir
 import { getFirestore, type Firestore } from "firebase/firestore"
 import { getStorage, type FirebaseStorage } from "firebase/storage"
 
+import { EnvValidationError, getClientEnv } from "./env"
+
 type FirebaseServices = {
   app: FirebaseApp
   auth: Auth
@@ -10,56 +12,101 @@ type FirebaseServices = {
   storage: FirebaseStorage
 }
 
-const firebaseEnv = {
-  NEXT_PUBLIC_FIREBASE_API_KEY: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  NEXT_PUBLIC_FIREBASE_PROJECT_ID: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  NEXT_PUBLIC_FIREBASE_APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-} as const
-
-const firebaseConfig: FirebaseOptions = {
-  apiKey: firebaseEnv.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: firebaseEnv.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: firebaseEnv.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: firebaseEnv.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: firebaseEnv.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: firebaseEnv.NEXT_PUBLIC_FIREBASE_APP_ID,
-}
-
-const missingKeys = Object.entries(firebaseEnv)
-  .filter(([, value]) => !value)
-  .map(([key]) => key)
-
-let services: FirebaseServices | null = null
-
-if (missingKeys.length > 0) {
-  console.warn(
-    `Firebase environment variables missing: ${missingKeys.join(
-      ", "
-    )}. Add them to your .env.local file to enable authentication.`
-  )
-} else {
-  try {
-    const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig)
-    const authInstance = getAuth(app)
-    if (typeof window !== "undefined") {
-      setPersistence(authInstance, browserLocalPersistence).catch((error) => {
-        console.warn("Failed to set Firebase auth persistence:", error)
-      })
+export class FirebaseClientInitializationError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message)
+    if (options?.cause) {
+      this.cause = options.cause
     }
-    services = {
-      app,
-      auth: authInstance,
-      firestore: getFirestore(app),
-      storage: getStorage(app),
-    }
-  } catch (error) {
-    console.error("Firebase initialization error:", error)
+    this.name = "FirebaseClientInitializationError"
   }
 }
 
-export const auth = services?.auth ?? null
-export const firestore = services?.firestore ?? null
-export const storage = services?.storage ?? null
+let cachedServices: FirebaseServices | null = null
+let cachedError: FirebaseClientInitializationError | null = null
+
+function buildFirebaseConfig(): FirebaseOptions {
+  const env = getClientEnv()
+  return {
+    apiKey: env.NEXT_PUBLIC_FIREBASE_API_KEY,
+    authDomain: env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    projectId: env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    storageBucket: env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+    appId: env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  }
+}
+
+function initializeFirebaseServices(): FirebaseServices {
+  if (typeof window === "undefined") {
+    throw new FirebaseClientInitializationError(
+      "Firebase client SDKs are only available in the browser runtime.",
+    )
+  }
+
+  const config = buildFirebaseConfig()
+  const app = getApps().length ? getApps()[0] : initializeApp(config)
+  const authInstance = getAuth(app)
+
+  if (typeof window !== "undefined") {
+    void setPersistence(authInstance, browserLocalPersistence).catch((error) => {
+      console.warn("Failed to set Firebase auth persistence:", error)
+    })
+  }
+
+  return {
+    app,
+    auth: authInstance,
+    firestore: getFirestore(app),
+    storage: getStorage(app),
+  }
+}
+
+function ensureFirebaseServices(): FirebaseServices {
+  if (cachedServices) {
+    return cachedServices
+  }
+
+  if (cachedError) {
+    throw cachedError
+  }
+
+  try {
+    cachedServices = initializeFirebaseServices()
+    return cachedServices
+  } catch (error) {
+    const wrapped =
+      error instanceof FirebaseClientInitializationError
+        ? error
+        : new FirebaseClientInitializationError(
+            error instanceof EnvValidationError
+              ? error.message
+              : error instanceof Error
+                ? error.message
+                : "Unknown Firebase initialization error",
+            { cause: error },
+          )
+    cachedError = wrapped
+    throw wrapped
+  }
+}
+
+export function getFirebaseApp(): FirebaseApp {
+  return ensureFirebaseServices().app
+}
+
+export function getFirebaseAuth(): Auth {
+  return ensureFirebaseServices().auth
+}
+
+export function getFirebaseFirestore(): Firestore {
+  return ensureFirebaseServices().firestore
+}
+
+export function getFirebaseStorage(): FirebaseStorage {
+  return ensureFirebaseServices().storage
+}
+
+export function getFirebaseClient(): FirebaseServices {
+  return ensureFirebaseServices()
+}

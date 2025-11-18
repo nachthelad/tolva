@@ -2,22 +2,34 @@ import { NextRequest, NextResponse } from "next/server"
 
 import { Timestamp } from "firebase-admin/firestore"
 
-import { adminAuth, adminFirestore } from "@/lib/firebase-admin"
+import { getAdminFirestore } from "@/lib/firebase-admin"
 import { serializeDocumentSnapshot } from "@/lib/server/document-serializer"
+import { createDocumentRequestSchema } from "@/lib/api-schemas"
+import {
+  authenticateRequest,
+  handleAuthError,
+} from "@/lib/server/authenticate-request"
+import { createRequestLogger } from "@/lib/server/logger"
 
 export const runtime = "nodejs"
 
 export async function POST(request: NextRequest) {
+  const baseLogger = createRequestLogger({
+    request,
+    context: { route: "POST /api/documents" },
+  })
+  let log = baseLogger
   try {
-    const authHeader = request.headers.get("authorization") ?? ""
-    if (!authHeader.startsWith("Bearer ")) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    const { uid } = await authenticateRequest(request)
+    log = log.withContext({ userId: uid })
+    const payload = await request.json()
+    const parsed = createDocumentRequestSchema.safeParse(payload)
+
+    if (!parsed.success) {
+      log.warn("Invalid document payload", { issues: parsed.error.issues })
+      return NextResponse.json({ error: "Invalid document payload" }, { status: 400 })
     }
 
-    const token = authHeader.slice(7)
-    const decoded = await adminAuth.verifyIdToken(token)
-
-    const payload = await request.json()
     const {
       fileName,
       storageUrl,
@@ -33,11 +45,7 @@ export async function POST(request: NextRequest) {
       periodEnd,
       manualEntry,
       textExtract,
-    } = payload ?? {}
-
-    if (!fileName) {
-      return NextResponse.json({ error: "Missing fileName" }, { status: 400 })
-    }
+    } = parsed.data
 
     const toTimestamp = (value?: string | null) => {
       if (!value) return null
@@ -45,7 +53,7 @@ export async function POST(request: NextRequest) {
     }
 
     const docData: Record<string, unknown> = {
-      userId: decoded.uid,
+      userId: uid,
       fileName,
       storageUrl: storageUrl ?? null,
       pdfUrl: storageUrl ?? null,
@@ -67,26 +75,30 @@ export async function POST(request: NextRequest) {
     docData.periodStart = toTimestamp(periodStart)
     docData.periodEnd = toTimestamp(periodEnd)
 
-    const docRef = await adminFirestore.collection("documents").add(docData)
+    const docRef = await getAdminFirestore().collection("documents").add(docData)
 
     return NextResponse.json({ documentId: docRef.id })
   } catch (error) {
-    console.error("Server create document error:", error)
+    const authResponse = handleAuthError(error)
+    if (authResponse) {
+      return authResponse
+    }
+    log.error("Server create document error", { error })
     return NextResponse.json({ error: "Failed to create document" }, { status: 500 })
   }
 }
 
 export async function GET(request: NextRequest) {
+  const baseLogger = createRequestLogger({
+    request,
+    context: { route: "GET /api/documents" },
+  })
+  let log = baseLogger
   try {
-    const authHeader = request.headers.get("authorization") ?? ""
-    if (!authHeader.startsWith("Bearer ")) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
+    const { uid } = await authenticateRequest(request)
+    log = log.withContext({ userId: uid })
 
-    const token = authHeader.slice(7)
-    const decoded = await adminAuth.verifyIdToken(token)
-
-    const snapshot = await adminFirestore.collection("documents").where("userId", "==", decoded.uid).get()
+    const snapshot = await getAdminFirestore().collection("documents").where("userId", "==", uid).get()
 
     const documents = snapshot.docs
       .map((doc) => serializeDocumentSnapshot(doc))
@@ -98,7 +110,11 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ documents })
   } catch (error) {
-    console.error("Server list documents error:", error)
+    const authResponse = handleAuthError(error)
+    if (authResponse) {
+      return authResponse
+    }
+    log.error("Server list documents error", { error })
     return NextResponse.json({ error: "Failed to load documents" }, { status: 500 })
   }
 }

@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { useRouter } from "next/navigation"
 import { uploadBillFile } from "@/lib/storage-helpers"
@@ -11,8 +11,14 @@ import { CATEGORY_OPTIONS } from "@/config/billing/categories"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Upload } from "lucide-react"
-import { storage } from "@/lib/firebase"
+import { FirebaseClientInitializationError } from "@/lib/firebase"
 import { FirebaseError } from "firebase/app"
+import {
+  describeAllowedFileTypes,
+  formatMaxUploadSize,
+  validateUploadConstraints,
+} from "@/lib/upload-constraints"
+import { createApiClient, type CreateDocumentInput } from "@/lib/api-client"
 
 export default function UploadPage() {
   const { user } = useAuth()
@@ -34,18 +40,30 @@ export default function UploadPage() {
     currency: "ARS",
   })
 
-  const clientStorageAvailable = Boolean(storage)
+  const uploadRequirementsCopy = `${describeAllowedFileTypes()} up to ${formatMaxUploadSize()}.`
+
+  const apiClient = useMemo(() => {
+    if (!user) return null
+    return createApiClient({ getToken: () => user.getIdToken() })
+  }, [user])
 
   const validateFile = useCallback((selectedFile?: File) => {
-    if (selectedFile) {
-      if (selectedFile.type === "application/pdf" || selectedFile.type.startsWith("image/")) {
-        setFile(selectedFile)
-        setError(null)
-        return
-      } else {
-        setError("Please select a PDF or image file")
-      }
+    if (!selectedFile) {
+      setFile(null)
+      return
     }
+    const validation = validateUploadConstraints({
+      size: selectedFile.size,
+      type: selectedFile.type,
+      name: selectedFile.name,
+    })
+    if (!validation.ok) {
+      setFile(null)
+      setError(validation.message)
+      return
+    }
+    setFile(selectedFile)
+    setError(null)
   }, [])
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -71,70 +89,39 @@ export default function UploadPage() {
   }
 
   const handleUpload = async () => {
-    if (!file || !user) return
+    if (!file || !user || !apiClient) return
     setLoading(true)
     setError(null)
 
     try {
       let storageUrl: string | null = null
-      const token = await user.getIdToken()
 
       const uploadViaApi = async () => {
-        const formData = new FormData()
-        formData.append("file", file)
-        formData.append("fileName", file.name)
-
-        const response = await fetch("/api/upload", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          body: formData,
-        })
-
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}))
-          throw new Error(data.error ?? "Server upload failed")
-        }
-
-        const data = await response.json()
-        return data.storageUrl as string
+        return apiClient.uploadFile(file, file.name)
       }
 
       const createDocumentViaApi = async (storageUrlValue: string) => {
-        const response = await fetch("/api/documents", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            fileName: file.name,
-            storageUrl: storageUrlValue,
-          }),
+        return apiClient.createDocument({
+          fileName: file.name,
+          storageUrl: storageUrlValue,
         })
-
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}))
-          throw new Error(data.error ?? "Failed to save document")
-        }
-
-        const data = await response.json()
-        return data.documentId as string
       }
 
-      if (clientStorageAvailable) {
-        try {
-          storageUrl = await uploadBillFile(user.uid, file)
-        } catch (uploadError) {
-          if (uploadError instanceof FirebaseError && uploadError.code === "storage/unauthorized") {
-            console.warn("Client storage upload unauthorized, falling back to server-side upload.")
-            storageUrl = await uploadViaApi()
-          } else {
-            throw uploadError
-          }
+      try {
+        storageUrl = await uploadBillFile(user.uid, file)
+      } catch (uploadError) {
+        const shouldFallback =
+          uploadError instanceof FirebaseClientInitializationError ||
+          (uploadError instanceof FirebaseError && uploadError.code === "storage/unauthorized")
+
+        if (!shouldFallback) {
+          throw uploadError
         }
-      } else {
+
+        console.warn(
+          "Client storage upload unavailable, falling back to server-side upload.",
+          uploadError,
+        )
         storageUrl = await uploadViaApi()
       }
 
@@ -151,19 +138,7 @@ export default function UploadPage() {
       // Trigger parsing (call API route) - fire and forget
       void (async () => {
         try {
-          const parseResponse = await fetch("/api/parse", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({ documentId: docId }),
-          })
-
-          if (!parseResponse.ok) {
-            const data = await parseResponse.json().catch(() => ({}))
-            console.warn("Parser service unavailable:", data.error)
-          }
+          await apiClient.triggerParse(docId)
         } catch (parseError) {
           console.warn("Parser request failed:", parseError)
         }
@@ -177,43 +152,30 @@ export default function UploadPage() {
   }
 
   const handleManualSubmit = async () => {
-    if (!user) return
+    if (!user || !apiClient) return
     setManualLoading(true)
     setManualError(null)
     try {
-      const token = await user.getIdToken()
-      const response = await fetch("/api/documents", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          fileName:
-            manualForm.provider?.trim() || manualForm.category?.trim()
-              ? `${manualForm.provider?.trim() || manualForm.category?.trim()} (manual)`
-              : `Manual Bill ${new Date().toISOString().slice(0, 10)}`,
-          storageUrl: null,
-          provider: manualForm.provider || null,
-          category: manualForm.category || null,
-          amount: manualForm.amount ?? null,
-          currency: manualForm.currency || null,
-          dueDate: manualForm.dueDate || null,
-          issueDate: manualForm.issueDate || null,
-          periodStart: manualForm.periodStart || null,
-          periodEnd: manualForm.periodEnd || null,
-          manualEntry: true,
-          textExtract: null,
-        }),
-      })
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}))
-        throw new Error(data.error ?? "Failed to save manual bill")
+      const payload: CreateDocumentInput = {
+        fileName:
+          manualForm.provider?.trim() || manualForm.category?.trim()
+            ? `${manualForm.provider?.trim() || manualForm.category?.trim()} (manual)`
+            : `Manual Bill ${new Date().toISOString().slice(0, 10)}`,
+        storageUrl: null,
+        provider: manualForm.provider?.trim() || null,
+        category: manualForm.category || null,
+        amount: manualForm.amount ?? null,
+        currency: manualForm.currency || null,
+        dueDate: manualForm.dueDate || null,
+        issueDate: manualForm.issueDate || null,
+        periodStart: manualForm.periodStart || null,
+        periodEnd: manualForm.periodEnd || null,
+        manualEntry: true,
+        textExtract: null,
       }
 
-      const data = await response.json()
-      router.push(`/documents/${data.documentId}`)
+      const documentId = await apiClient.createDocument(payload)
+      router.push(`/documents/${documentId}`)
     } catch (err) {
       console.error("Manual doc error:", err)
       setManualError(err instanceof Error ? err.message : "Failed to save manual bill")
@@ -229,10 +191,12 @@ export default function UploadPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-6 lg:p-10">
-      <div className="max-w-4xl">
+      <div className="max-w-4xl flex flex-col gap-2">
         <p className="text-sm uppercase tracking-wide text-slate-500">Uploader</p>
         <h1 className="text-3xl font-bold">Upload Bill</h1>
-        <p className="text-slate-400 mt-2">Upload a bill or enter the details manually to track it in your dashboard.</p>
+        <p className="text-slate-400">
+          Upload a bill or enter the details manually to track it in your dashboard.
+        </p>
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-2">
@@ -251,13 +215,21 @@ export default function UploadPage() {
               onDrop={handleDrop}
             >
               <Upload className="w-10 h-10 mx-auto mb-3 text-slate-500" />
-              <input type="file" accept=".pdf,image/*" onChange={handleFileChange} className="hidden" id="file-input" />
+              <input
+                type="file"
+                accept=".pdf,.png,.jpg,.jpeg,.heic,.heif,.webp,.tif,.tiff,image/*"
+                onChange={handleFileChange}
+                className="hidden"
+                id="file-input"
+              />
               <label htmlFor="file-input" className="cursor-pointer">
                 <span className="text-base font-semibold text-slate-100">Click to select</span>
                 {file && <p className="text-sm text-slate-400 mt-2">{file.name}</p>}
                 <p className="text-xs text-slate-500 mt-1">or drag & drop here</p>
               </label>
             </div>
+
+            <p className="text-sm text-slate-400">{uploadRequirementsCopy} Files are hashed before upload and scanned for malware when available.</p>
 
             {error && <div className="text-sm text-red-400">{error}</div>}
 
