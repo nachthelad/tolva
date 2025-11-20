@@ -45,6 +45,7 @@ export interface BillDocument {
   parsedData?: Record<string, any>
   hoaDetails?: HoaDetails | null
   manualEntry?: boolean
+  updatedAt?: Date | null
 }
 
 // Providers

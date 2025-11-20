@@ -24,6 +24,7 @@ export const billDocumentSchema = z.object({
   lastParsedAt: z.string().optional().nullable(),
   hoaDetails: z.unknown().optional(),
   manualEntry: z.boolean().optional(),
+  updatedAt: z.string().optional().nullable(),
 })
 
 export const listDocumentsResponseSchema = z.object({

@@ -28,6 +28,37 @@ export async function fetchIncomeEntries(token: string): Promise<IncomeEntry[]> 
   }))
 }
 
+export async function addIncomeEntry(
+  token: string,
+  data: { amount: number; source: string; date: Date },
+): Promise<IncomeEntry> {
+  const response = await fetch("/api/income", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      amount: data.amount,
+      source: data.source,
+      date: data.date.toISOString(),
+    }),
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.error ?? "Failed to add income entry")
+  }
+
+  const entry = await response.json()
+  return {
+    id: entry.id,
+    amount: entry.amount ?? 0,
+    source: entry.source ?? "Unknown",
+    date: normalizeDateInput(entry.date),
+  }
+}
+
 function normalizeDateInput(value: unknown): Date {
   if (value instanceof Date) {
     return value
