@@ -213,6 +213,7 @@ function convertDocument(doc: ApiBillDocument): BillDocument {
     lastParsedAt: doc.lastParsedAt ? normalizeDate(doc.lastParsedAt) : null,
     hoaDetails: doc.hoaDetails ?? null,
     manualEntry: doc.manualEntry ?? false,
+    updatedAt: doc.updatedAt ? normalizeDate(doc.updatedAt) : null,
   }
 }
 

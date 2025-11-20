@@ -2,9 +2,11 @@ import type React from "react"
 import { redirect } from "next/navigation"
 
 import { ProtectedRoute } from "@/components/protected-route"
-import { Sidebar } from "@/components/sidebar"
+import { AppSidebar } from "@/components/app-sidebar"
+import { SiteHeader } from "@/components/site-header"
 import { AmountVisibilityProvider } from "@/components/amount-visibility"
 import { verifyAuthFromCookies } from "@/lib/server/require-auth"
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 
 export default async function ProtectedLayout({
   children,
@@ -18,12 +20,15 @@ export default async function ProtectedLayout({
 
   return (
     <AmountVisibilityProvider>
-      <div className="flex min-h-screen bg-background text-foreground">
-        <Sidebar />
-        <main className="flex-1 min-h-screen bg-background">
-          <ProtectedRoute>{children}</ProtectedRoute>
-        </main>
-      </div>
+      <SidebarProvider>
+        <AppSidebar />
+        <SidebarInset>
+          <SiteHeader />
+          <main className="flex-1 p-6">
+            <ProtectedRoute>{children}</ProtectedRoute>
+          </main>
+        </SidebarInset>
+      </SidebarProvider>
     </AmountVisibilityProvider>
   )
 }

@@ -20,18 +20,17 @@
 import { useAuth } from "@/lib/auth-context"
 import { useEffect, useMemo, useState } from "react"
 import type { BillDocument } from "@/lib/firestore-helpers"
-import Link from "next/link"
 import { fetchIncomeEntries, type IncomeEntry } from "@/lib/income-client"
-import { CATEGORY_OPTIONS, type CategoryValue } from "@/config/billing/categories"
+import { type CategoryValue } from "@/config/billing/categories"
 import { normalizeCategory } from "@/lib/category-utils"
 import { createApiClient, type DashboardSummary } from "@/lib/api-client"
-import { AmountVisibilityToggle, useAmountVisibility } from "@/components/amount-visibility"
-import { DashboardCard } from "@/components/dashboard/dashboard-card"
-import { BreakdownBar } from "@/components/dashboard/breakdown-bar"
+import { useAmountVisibility } from "@/components/amount-visibility"
 import { resolveDocDate, labelForCategory, defaultCategoryTotals } from "@/lib/billing-utils"
-type DashboardDocument = Omit<BillDocument, "uploadedAt"> & { uploadedAt: Date }
+import { KpiCards } from "@/components/dashboard/kpi-cards"
+import { DashboardCharts } from "@/components/dashboard/charts"
+import { RecentActivity, type ActivityItem } from "@/components/dashboard/recent-activity"
 
-const categoryOrder = CATEGORY_OPTIONS.map((option) => option.value) as CategoryValue[]
+type DashboardDocument = Omit<BillDocument, "uploadedAt"> & { uploadedAt: Date }
 
 export default function DashboardPage() {
   const { user } = useAuth()
@@ -81,6 +80,20 @@ export default function DashboardPage() {
     }
   }, [apiClient, user])
 
+  // Auto-refresh for pending documents
+  useEffect(() => {
+    const hasPendingDocs = expenseDocs.some(doc => doc.status === "pending")
+    if (!hasPendingDocs || !apiClient) return
+
+    const interval = setInterval(() => {
+      apiClient.listDocuments().then(docs => {
+        setExpenseDocs(docs)
+      }).catch(console.error)
+    }, 5000)
+
+    return () => clearInterval(interval)
+  }, [expenseDocs, apiClient])
+
   useEffect(() => {
     if (!user || !apiClient) return
     let cancelled = false
@@ -100,7 +113,6 @@ export default function DashboardPage() {
   }, [apiClient, user])
 
   const currentYear = new Date().getFullYear()
-  const currentMonthName = new Date().toLocaleDateString("es-AR", { month: "long", year: "numeric" })
 
   const expenseMetrics = useMemo(() => {
     const docs = expenseDocs.filter((doc) => ["parsed", "needs_review"].includes(doc.status))
@@ -178,7 +190,6 @@ export default function DashboardPage() {
     monthExpenses: 0,
   }
   const fallbackCategories = summaryFallback?.categories ?? defaultCategoryTotals()
-  const fallbackIncomeSources = summaryFallback?.incomeSources ?? {}
 
   const hasLiveExpenses = expenseDocs.length > 0
   const hasLiveIncome = incomeEntries.length > 0
@@ -191,9 +202,60 @@ export default function DashboardPage() {
   }
 
   const displayCategoryTotals = hasLiveExpenses ? expenseMetrics.categoryTotals : fallbackCategories
-  const displayIncomeSources = hasLiveIncome ? incomeMetrics.perSource : fallbackIncomeSources
-  const categoryMax = Math.max(...Object.values(displayCategoryTotals), 0)
-  const incomeMax = Math.max(...Object.values(displayIncomeSources), 0)
+
+  const recentActivity: ActivityItem[] = useMemo(() => {
+    const expenses: ActivityItem[] = expenseDocs
+      .filter(doc => ["parsed", "needs_review", "pending"].includes(doc.status))
+      .map(doc => ({
+        id: doc.id,
+        type: "expense",
+        date: doc.updatedAt || doc.uploadedAt,
+        amount: doc.totalAmount || 0,
+        description: doc.providerNameDetected || doc.providerId || "Unknown Bill",
+        category: labelForCategory(doc.category),
+        status: doc.status as any
+      }))
+
+    const incomes: ActivityItem[] = incomeEntries.map(entry => ({
+      id: entry.id,
+      type: "income",
+      date: entry.date,
+      amount: entry.amount,
+      description: entry.source,
+      category: "Income",
+    }))
+
+    return [...expenses, ...incomes]
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+      .slice(0, 10)
+  }, [expenseDocs, incomeEntries])
+
+  const monthlyMetrics = useMemo(() => {
+    const months = Array.from({ length: 12 }, (_, i) => {
+      const date = new Date(currentYear, i, 1)
+      return {
+        name: date.toLocaleString("default", { month: "short" }),
+        expenses: 0,
+        income: 0,
+      }
+    })
+
+    expenseDocs.forEach((doc) => {
+      if (!["parsed", "needs_review"].includes(doc.status)) return
+      const amount = doc.totalAmount ?? 0
+      if (!amount) return
+      const docDate = resolveDocDate(doc)
+      if (!docDate || docDate.getFullYear() !== currentYear) return
+      months[docDate.getMonth()].expenses += amount
+    })
+
+    incomeEntries.forEach((entry) => {
+      if (entry.date.getFullYear() !== currentYear) return
+      months[entry.date.getMonth()].income += entry.amount
+    })
+
+    return months
+  }, [expenseDocs, incomeEntries, currentYear])
 
   if (!user) {
     return (
@@ -205,114 +267,44 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="text-slate-400">Loading dashboard...</div>
+      <div className="flex items-center justify-center h-full">
+        <div className="text-muted-foreground">Loading dashboard...</div>
       </div>
     )
   }
 
   return (
-    <div className="p-6 space-y-8 bg-slate-950 min-h-screen text-slate-100">
-      <header className="flex flex-col gap-2">
-          <div>
-            <p className="text-sm uppercase tracking-wide text-slate-400">Finance overview</p>
-            <div className="flex items-center gap-2">
-              <h1 className="text-3xl font-bold">Expense Dashboard</h1>
-              <AmountVisibilityToggle />
-            </div>
-          </div>
+    <div className="space-y-8">
+      <div className="flex items-center justify-between space-y-2">
         <div>
-          <p className="text-slate-400">Monitor and analyze your utility expenses across all services.</p>
-          {error && <p className="text-sm text-red-400 mt-1">{error}</p>}
+          <h2 className="text-2xl font-bold tracking-tight">Dashboard</h2>
+          <p className="text-muted-foreground">
+            Overview of your financial status and recent activity.
+          </p>
         </div>
-      </header>
+      </div>
 
-      <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <DashboardCard
-          title="Total Expenses"
-          subtitle={`This year (${currentYear})`}
-          amount={displayTotals.totalExpensesYear}
-          hidden={!showAmounts}
-        />
-        <DashboardCard
-          title="Total Income"
-          subtitle={`This year (${currentYear})`}
-          amount={displayTotals.totalIncomeYear}
-          hidden={!showAmounts}
-        />
-        <DashboardCard
-          title="Net Amount"
-          subtitle={`This year (${currentYear})`}
-          amount={displayTotals.netAmount}
-          accent={displayTotals.netAmount >= 0 ? "text-emerald-400" : "text-red-400"}
-          hidden={!showAmounts}
-        />
-        <DashboardCard
-          title="This Month"
-          subtitle={currentMonthName}
-          amount={displayTotals.monthExpenses}
-          hidden={!showAmounts}
-        />
-      </section>
+      {error && (
+        <div className="bg-destructive/15 text-destructive px-4 py-2 rounded-md text-sm">
+          {error}
+        </div>
+      )}
 
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6 space-y-6">
-            <div>
-              <p className="text-sm uppercase tracking-wide text-slate-400">Expenses Breakdown</p>
-              <h2 className="text-xl font-semibold">Total expenses by category</h2>
-            </div>
-            <div className="space-y-4">
-              {categoryMax === 0 ? (
-                <p className="text-sm text-slate-400">No expenses yet. Upload and parse some bills to see your breakdown.</p>
-              ) : (
-                categoryOrder.map((category) => (
-                  <BreakdownBar
-                    key={category}
-                    label={labelForCategory(category)}
-                    amount={displayCategoryTotals[category] ?? 0}
-                    maxValue={categoryMax}
-                    hidden={!showAmounts}
-                  />
-                ))
-              )}
-            </div>
-          </div>
+      <KpiCards
+        totalExpenses={displayTotals.totalExpensesYear}
+        totalIncome={displayTotals.totalIncomeYear}
+        netIncome={displayTotals.netAmount}
+        monthExpenses={displayTotals.monthExpenses}
+        showAmounts={showAmounts}
+      />
 
-          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6 space-y-6">
-            <div>
-              <p className="text-sm uppercase tracking-wide text-slate-400">Income Breakdown</p>
-              <h2 className="text-xl font-semibold">Total income by source</h2>
-              <p className="text-xs text-slate-500 mt-1">
-                Manage entries from the{" "}
-                <Link href="/income" className="text-emerald-300 hover:text-emerald-200 underline underline-offset-2">
-                  Income page
-                </Link>
-                .
-              </p>
-            </div>
+      <DashboardCharts 
+        categoryTotals={displayCategoryTotals} 
+        monthlyData={monthlyMetrics}
+        showAmounts={showAmounts} 
+      />
 
-            <div className="space-y-4">
-              {incomeMax === 0 ? (
-                <p className="text-sm text-slate-400">
-                  No income entries yet. Head to the Income page to add your salaries or side gigs.
-                </p>
-              ) : (
-                Object.entries(displayIncomeSources)
-                  .sort(([, a], [, b]) => b - a)
-                  .map(([source, total]) => (
-                    <BreakdownBar
-                      key={source}
-                      label={source}
-                      amount={total}
-                      maxValue={incomeMax}
-                      accent="bg-emerald-400"
-                      hidden={!showAmounts}
-                    />
-                  ))
-              )}
-            </div>
-          </div>
-      </section>
+      <RecentActivity items={recentActivity} showAmounts={showAmounts} />
     </div>
   )
 }

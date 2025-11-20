@@ -1,11 +1,19 @@
 import { CATEGORY_SET, type CategoryValue } from "@/config/billing/categories"
 import { PROVIDER_KEYWORDS } from "@/config/billing/providerKeywords"
+import { PROVIDER_HINTS } from "@/config/billing/providerHints"
 
 export function normalizeCategory(
   providerId?: string | null,
   rawCategory?: string | null,
   providerName?: string | null,
 ): CategoryValue {
+  // 1. Check PROVIDER_HINTS first (most specific)
+  if (providerId) {
+    const hint = PROVIDER_HINTS.find(h => h.providerId === providerId)
+    if (hint) return hint.category
+  }
+
+  // 2. Check if rawCategory is already valid
   const normalizedCategory = normalizeValue(rawCategory)
   if (normalizedCategory && CATEGORY_SET.has(normalizedCategory as CategoryValue)) {
     return normalizedCategory as CategoryValue
