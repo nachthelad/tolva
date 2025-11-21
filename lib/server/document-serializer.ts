@@ -56,5 +56,6 @@ export function serializeDocumentSnapshot(doc: DocumentSnapshot): Record<string,
     periodStart: toIsoDate(data.periodStart),
     periodEnd: toIsoDate(data.periodEnd),
     lastParsedAt: toIsoDateTime(data.lastParsedAt),
+    updatedAt: toIsoDateTime(data.updatedAt),
   }
 }

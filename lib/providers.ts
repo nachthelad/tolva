@@ -1,7 +1,7 @@
 export type ProviderSeed = {
   id: string
   name: string
-  category: "utilities" | "telecom" | "credit_card"
+  category: "electricity" | "gas" | "water" | "telecom" | "credit_card" | "hoa" | "other"
   aliases: string[]
 }
 
@@ -9,19 +9,19 @@ export const PROVIDERS: ProviderSeed[] = [
   {
     id: "edesur",
     name: "Edesur",
-    category: "utilities",
+    category: "electricity",
     aliases: ["Edesur", "EDESUR S.A."],
   },
   {
     id: "aysa",
     name: "AySA",
-    category: "utilities",
+    category: "water",
     aliases: ["AySA", "AGUA Y SANEAMIENTO", "Aysa"],
   },
   {
     id: "metrogas",
     name: "Metrogas",
-    category: "utilities",
+    category: "gas",
     aliases: ["Metrogas", "METROGAS S.A."],
   },
   {

@@ -14,7 +14,7 @@ export function resolveDocDate(doc: BillDocument): Date | null {
   return null
 }
 
-export function labelForCategory(category: (typeof categoryOrder)[number]) {
+export function labelForCategory(category: string | null | undefined) {
   switch (category) {
     case "electricity":
       return "Electricity"
@@ -25,7 +25,7 @@ export function labelForCategory(category: (typeof categoryOrder)[number]) {
     case "internet":
       return "Mobile / Internet"
     case "hoa":
-      return "Home / HOA"
+      return "HOA"
     case "credit_card":
       return "Credit Card"
     default:
